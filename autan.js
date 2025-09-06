@@ -1,928 +1,931 @@
-// ===== AUTHENTICATION SYSTEM =====
-// Login, OTP Verification, and CAPTCHA Handler
-// Version: 1.0
+// Global variables
+let countdownTimer;
+let timeLeft = 60; // 1 minute in seconds
+let resendTimer = null;
+let resendCooldownTime = 60; // Initial cooldown time in seconds
 
 // API Configuration
-const API_URL = "https://test.bulshitman1.workers.dev"; // Backend Worker URL
+const API_URL = "https://test.bulshitman1.workers.dev"; // ganti dengan URL Worker kamu
 
-// Login system variables
-let currentUser = null;
-let otpTimer = null;
-let otpTimeLeft = 60; // 1 minute in seconds
-let resendTimer = null;
-let currentCaptcha = '';
-let resendCount = 0; // Track number of resend attempts
-let resendCooldownTime = 60; // Initial cooldown: 1 minute
+// Wait for DOM to be fully loaded
+document.addEventListener('DOMContentLoaded', function() {
+    initializeLoginOTP();
+});
 
-// ===== CAPTCHA SYSTEM =====
-
-/**
- * Generate new CAPTCHA code
- */
-function generateCaptcha() {
-    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-    let captcha = '';
+// Initialize login and OTP functionality
+function initializeLoginOTP() {
+    // Add event listeners for forms
+    const loginForm = document.querySelector('#loginForm form');
+    const otpForm = document.querySelector('#otpForm form');
     
-    // Generate 6 character captcha
-    for (let i = 0; i < 6; i++) {
-        captcha += chars.charAt(Math.floor(Math.random() * chars.length));
+    if (loginForm) {
+        loginForm.addEventListener('submit', handleLogin);
     }
     
-    currentCaptcha = captcha;
-    document.getElementById('captchaText').textContent = captcha;
-    
-    // Clear captcha input
-    document.getElementById('captchaInput').value = '';
-    
-    // Add rotation animation to refresh button
-    const refreshBtn = document.querySelector('[onclick="generateCaptcha()"] i');
-    if (refreshBtn) {
-        refreshBtn.style.transform = 'rotate(360deg)';
-        refreshBtn.style.transition = 'transform 0.5s ease-in-out';
-        
-        setTimeout(() => {
-            refreshBtn.style.transform = 'rotate(0deg)';
-        }, 500);
+    if (otpForm) {
+        otpForm.addEventListener('submit', handleOTPVerification);
     }
+    
+    // Add event listeners for OTP inputs
+    const otpInputs = document.querySelectorAll('.otp-input');
+    otpInputs.forEach((input, index) => {
+        input.addEventListener('input', (e) => moveToNext(e.target, index));
+        input.addEventListener('keydown', (e) => handleOTPKeydown(e, index));
+    });
 }
 
-/**
- * Validate CAPTCHA input
- */
-function validateCaptcha() {
-    const userInput = document.getElementById('captchaInput').value.toUpperCase().trim();
-    return userInput === currentCaptcha;
-}
-
-// ===== LOGIN SYSTEM =====
-
-/**
- * Handle login form submission
- */
+// Login form handler
 async function handleLogin(event) {
     event.preventDefault();
     
-    const nik = document.getElementById('nikLogin').value.trim();
-    const password = document.getElementById('passwordLogin').value;
+    const nik = document.getElementById('nik').value;
+    const password = document.getElementById('password').value;
     
-    if (!nik || !password) {
-        showAlert('Silakan masukkan NIK dan password!', 'error');
+    // Basic validation
+    if (nik.length !== 16) {
+        alert('NIK harus terdiri dari 16 digit');
         return;
     }
     
-    // Validate CAPTCHA
-    if (!validateCaptcha()) {
-        showAlert('Kode CAPTCHA salah! Silakan coba lagi.', 'error');
-        generateCaptcha(); // Generate new captcha
-        document.getElementById('captchaInput').focus();
+    if (password.length < 6) {
+        alert('Password minimal 6 karakter');
         return;
     }
     
     // Show loading state
-    showLoginLoading(true);
+    const submitButton = event.target.querySelector('button[type="submit"]');
+    const originalContent = submitButton.innerHTML;
+    submitButton.disabled = true;
+    submitButton.innerHTML = '<i class="fas fa-spinner fa-spin mr-2 text-blue-200"></i>Memproses...';
     
     try {
-        const response = await fetch(API_URL, {
+        // Call API
+        const res = await fetch(API_URL, {
             method: "POST",
             headers: {"Content-Type": "application/json"},
             body: JSON.stringify({ action: "login", nik, password })
         });
 
-        const data = await response.json();
-        
-        showLoginLoading(false);
-        
+        const data = await res.json();
+        alert(data.message);
+
         if (data.success && data.step === "otp") {
-            // Store NIK for OTP verification
             localStorage.setItem("nik", nik);
             
-            // Debug: Log the complete API response
-            console.log('Complete API Response:', JSON.stringify(data, null, 2));
+            // Get email from login response
+            let userEmail = null;
             
-            // Get email from API response with comprehensive search
-            let userEmail = findEmailInResponse(data);
+            // Check all possible email fields in response
+            if (data.email && data.email.includes('@')) {
+                userEmail = data.email;
+            } else if (data.user && data.user.email && data.user.email.includes('@')) {
+                userEmail = data.user.email;
+            } else if (data.data && data.data.email && data.data.email.includes('@')) {
+                userEmail = data.data.email;
+            } else if (data.userInfo && data.userInfo.email && data.userInfo.email.includes('@')) {
+                userEmail = data.userInfo.email;
+            } else if (data.profile && data.profile.email && data.profile.email.includes('@')) {
+                userEmail = data.profile.email;
+            }
             
-            showOTPForm(userEmail);
-            showAlert(data.message, 'success');
-        } else {
-            showAlert(data.message || 'Login gagal!', 'error');
-            // Generate new captcha on login failure
-            generateCaptcha();
+            if (userEmail) {
+                localStorage.setItem("userEmail", userEmail);
+                updateEmailDisplay(userEmail);
+            } else {
+                // Show error message instead of trying API call
+                updateEmailDisplay("Email tidak ditemukan dalam response login");
+                
+                // Try fallback API call as last resort
+                await fetchUserEmail(nik);
+            }
+            
+            // Reset cooldown time to initial value when starting new login
+            resendCooldownTime = 60;
+            
+            // Hide login form and show OTP form
+            document.getElementById('loginForm').classList.add('hidden');
+            document.getElementById('otpForm').classList.remove('hidden');
+            
+            // Start countdown timer
+            startCountdown();
+            
+            // Auto-disable resend button with initial cooldown
+            startResendCooldown(60);
         }
     } catch (error) {
-        showLoginLoading(false);
-        showAlert('Terjadi kesalahan koneksi. Silakan coba lagi.', 'error');
-        // Generate new captcha on connection error
-        generateCaptcha();
         console.error('Login error:', error);
+        alert('Terjadi kesalahan saat login. Silakan coba lagi.');
+    } finally {
+        // Reset button
+        submitButton.disabled = false;
+        submitButton.innerHTML = originalContent;
     }
 }
 
-/**
- * Find email in API response object
- */
-function findEmailInResponse(data) {
-    // Function to recursively search for email in nested objects
-    function findEmailInObject(obj, path = '') {
-        if (!obj || typeof obj !== 'object') return null;
-        
-        // List of possible email field names
-        const emailFields = [
-            'email', 'user_email', 'Email', 'USER_EMAIL',
-            'emailAddress', 'email_address', 'userEmail', 'UserEmail',
-            'mail', 'Mail', 'e_mail', 'E_MAIL', 'emailAddr'
-        ];
-        
-        // Check direct properties
-        for (const field of emailFields) {
-            if (obj[field] && typeof obj[field] === 'string' && obj[field].includes('@')) {
-                console.log(`Email found at ${path}.${field}:`, obj[field]);
-                return obj[field];
-            }
-        }
-        
-        // Recursively search in nested objects
-        for (const [key, value] of Object.entries(obj)) {
-            if (typeof value === 'object' && value !== null) {
-                const found = findEmailInObject(value, path ? `${path}.${key}` : key);
-                if (found) return found;
-            }
-        }
-        
-        return null;
-    }
-    
-    // Search for email in the entire response
-    let userEmail = findEmailInObject(data);
-    
-    // Additional specific checks for common API response structures
-    if (!userEmail) {
-        const commonPaths = [
-            data.user?.email,
-            data.user?.user_email,
-            data.userData?.email,
-            data.result?.email,
-            data.response?.email,
-            data.account?.email,
-            data.profile?.email
-        ];
-        
-        for (const path of commonPaths) {
-            if (path && typeof path === 'string' && path.includes('@')) {
-                userEmail = path;
-                console.log('Email found in common path:', userEmail);
-                break;
-            }
+// OTP input navigation
+function moveToNext(current, index) {
+    if (current.value.length === 1 && index < 5) {
+        const nextInput = document.querySelectorAll('.otp-input')[index + 1];
+        if (nextInput) {
+            nextInput.focus();
         }
     }
     
-    // If still no email found, check if there's any string containing @ symbol
-    if (!userEmail) {
-        function findEmailString(obj) {
-            if (typeof obj === 'string' && obj.includes('@') && obj.includes('.')) {
-                // Basic email validation
-                const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-                if (emailRegex.test(obj)) {
-                    return obj;
-                }
+    // Auto-submit when all fields are filled
+    const otpInputs = document.querySelectorAll('.otp-input');
+    const allFilled = Array.from(otpInputs).every(input => input.value.length === 1);
+    if (allFilled) {
+        // Small delay to show the last digit
+        setTimeout(() => {
+            const otpForm = document.querySelector('#otpForm form');
+            if (otpForm) {
+                otpForm.dispatchEvent(new Event('submit'));
             }
-            if (typeof obj === 'object' && obj !== null) {
-                for (const value of Object.values(obj)) {
-                    const found = findEmailString(value);
-                    if (found) return found;
-                }
-            }
-            return null;
-        }
-        
-        userEmail = findEmailString(data);
-        if (userEmail) {
-            console.log('Email found by pattern matching:', userEmail);
-        }
-    }
-    
-    // Final fallback
-    if (!userEmail || !userEmail.includes('@')) {
-        userEmail = 'email yang terdaftar';
-        console.warn('No valid email found in API response. Using fallback email text');
-    }
-    
-    return userEmail;
-}
-
-/**
- * Toggle password visibility
- */
-function togglePassword(inputId) {
-    const input = document.getElementById(inputId);
-    const icon = document.getElementById(inputId + 'Icon');
-    
-    if (input.type === 'password') {
-        input.type = 'text';
-        icon.classList.remove('fa-eye');
-        icon.classList.add('fa-eye-slash');
-    } else {
-        input.type = 'password';
-        icon.classList.remove('fa-eye-slash');
-        icon.classList.add('fa-eye');
+        }, 500);
     }
 }
 
-// ===== OTP SYSTEM =====
-
-/**
- * Show OTP verification form
- */
-function showOTPForm(email) {
-    // Hide login form and show OTP form
-    document.getElementById('loginForm').classList.add('hidden');
-    document.getElementById('otpForm').classList.remove('hidden');
+// Handle OTP input keydown events
+function handleOTPKeydown(event, index) {
+    const otpInputs = document.querySelectorAll('.otp-input');
     
-    // Display masked email
-    const maskedEmail = maskEmail(email);
-    document.getElementById('emailDisplay').textContent = maskedEmail;
+    // Handle backspace
+    if (event.key === 'Backspace') {
+        if (event.target.value === '' && index > 0) {
+            otpInputs[index - 1].focus();
+        }
+    }
     
-    // Reset resend count and cooldown for new login session
-    resendCount = 0;
-    resendCooldownTime = 60; // Reset to 1 minute
+    // Handle arrow keys
+    if (event.key === 'ArrowLeft' && index > 0) {
+        otpInputs[index - 1].focus();
+    }
     
-    // Start OTP timer
-    startOTPTimer();
+    if (event.key === 'ArrowRight' && index < 5) {
+        otpInputs[index + 1].focus();
+    }
     
-    // Start initial resend cooldown (1 minute)
-    startResendCooldown(resendCooldownTime);
-    
-    // Focus on first OTP input
-    document.querySelector('.otp-input').focus();
+    // Only allow numbers
+    if (!/[0-9]/.test(event.key) && !['Backspace', 'Delete', 'Tab', 'ArrowLeft', 'ArrowRight'].includes(event.key)) {
+        event.preventDefault();
+    }
 }
 
-/**
- * Handle OTP verification
- */
+// OTP verification handler
 async function handleOTPVerification(event) {
     event.preventDefault();
     
-    const nik = localStorage.getItem("nik");
     const otpInputs = document.querySelectorAll('.otp-input');
-    let otp = '';
-    
-    otpInputs.forEach(input => {
-        otp += input.value;
-    });
+    const otp = Array.from(otpInputs).map(input => input.value).join('');
     
     if (otp.length !== 6) {
-        showAlert('Silakan masukkan kode OTP 6 digit!', 'error');
+        alert('Silakan masukkan kode OTP 6 digit');
         return;
     }
     
     // Show loading state
-    showOTPLoading(true);
+    const submitButton = event.target.querySelector('button[type="submit"]');
+    const originalContent = submitButton.innerHTML;
+    submitButton.disabled = true;
+    submitButton.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>Memverifikasi...';
     
     try {
-        const response = await fetch(API_URL, {
+        const nik = localStorage.getItem("nik");
+        
+        // Call API
+        const res = await fetch(API_URL, {
             method: "POST",
             headers: {"Content-Type": "application/json"},
             body: JSON.stringify({ action: "verify-otp", nik, otp })
         });
 
-        const data = await response.json();
-        
-        showOTPLoading(false);
-        
+        const data = await res.json();
+        alert(data.message);
+
         if (data.success) {
-            // Store user data
-            localStorage.setItem("user", JSON.stringify(data.user));
-            currentUser = data.user;
+            // Clear countdown timer
+            if (countdownTimer) {
+                clearInterval(countdownTimer);
+            }
             
-            // Clear timers
-            clearInterval(otpTimer);
-            clearInterval(resendTimer);
+            // Clear resend timer
+            if (resendTimer) {
+                clearInterval(resendTimer);
+            }
             
-            // Hide login container and show dashboard
-            setTimeout(() => {
-                document.getElementById('loginContainer').classList.add('hidden');
-                document.getElementById('dashboardContainer').classList.remove('hidden');
-                
-                // Update user info in dashboard immediately
-                updateDashboardUserInfo();
-                
-                // Also update welcome message
-                updateWelcomeMessage();
-            }, 500);
-        } else {
-            showAlert(data.message || 'Kode OTP salah!', 'error');
+            // Store user info from API response
+            localStorage.setItem('user', JSON.stringify(data.user));
+            localStorage.setItem('userNIK', nik);
+            localStorage.setItem('userName', data.user.name || 'User');
+            localStorage.setItem('isLoggedIn', 'true');
             
-            // Clear OTP inputs and disable button
-            otpInputs.forEach(input => {
-                input.value = '';
-            });
-            checkOTPComplete(); // This will disable the button
-            otpInputs[0].focus();
+            // Show dashboard
+            showDashboard();
         }
     } catch (error) {
-        showOTPLoading(false);
-        showAlert('Terjadi kesalahan koneksi. Silakan coba lagi.', 'error');
         console.error('OTP verification error:', error);
+        alert('Terjadi kesalahan saat verifikasi OTP. Silakan coba lagi.');
+    } finally {
+        // Reset button
+        submitButton.disabled = false;
+        submitButton.innerHTML = originalContent;
     }
 }
 
-/**
- * Handle OTP input navigation
- */
-function moveToNext(current, index) {
-    // Only allow numbers
-    current.value = current.value.replace(/[^0-9]/g, '');
+// Countdown timer
+function startCountdown() {
+    timeLeft = 60; // Reset to 1 minute (60 seconds)
+    const countdownElement = document.getElementById('countdown');
     
-    if (current.value.length === 1 && index < 5) {
-        document.querySelectorAll('.otp-input')[index + 1].focus();
-    }
-    
-    // Check if all OTP fields are filled and enable/disable verify button
-    checkOTPComplete();
-}
-
-/**
- * Handle OTP keydown events (backspace navigation)
- */
-function handleOTPKeydown(event, current, index) {
-    if (event.key === 'Backspace') {
-        // If current field is empty and backspace is pressed, move to previous field
-        if (current.value === '' && index > 0) {
-            event.preventDefault();
-            const otpInputs = document.querySelectorAll('.otp-input');
-            otpInputs[index - 1].focus();
-            otpInputs[index - 1].value = '';
-            checkOTPComplete();
-        } else if (current.value !== '') {
-            // If current field has value, clear it and check completion
-            setTimeout(() => {
-                checkOTPComplete();
-            }, 10);
-        }
-    }
-}
-
-/**
- * Check if all OTP inputs are filled
- */
-function checkOTPComplete() {
-    const otpInputs = document.querySelectorAll('.otp-input');
-    const otpButton = document.getElementById('otpButton');
-    let allFilled = true;
-    
-    otpInputs.forEach(input => {
-        if (input.value === '') {
-            allFilled = false;
-        }
-    });
-    
-    // Enable/disable verify button based on completion
-    if (allFilled) {
-        otpButton.disabled = false;
-        otpButton.classList.remove('opacity-50', 'cursor-not-allowed');
-        otpButton.classList.add('hover:from-green-700', 'hover:to-teal-700', 'transform', 'hover:scale-105');
-    } else {
-        otpButton.disabled = true;
-        otpButton.classList.add('opacity-50', 'cursor-not-allowed');
-        otpButton.classList.remove('hover:from-green-700', 'hover:to-teal-700', 'transform', 'hover:scale-105');
-    }
-}
-
-/**
- * Start OTP countdown timer
- */
-function startOTPTimer() {
-    otpTimeLeft = 60; // Reset to 1 minute
-    const timerDisplay = document.getElementById('otpTimer');
-    
-    otpTimer = setInterval(() => {
-        const minutes = Math.floor(otpTimeLeft / 60);
-        const seconds = otpTimeLeft % 60;
+    countdownTimer = setInterval(() => {
+        const minutes = Math.floor(timeLeft / 60);
+        const seconds = timeLeft % 60;
+        countdownElement.textContent = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
         
-        timerDisplay.textContent = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
-        
-        if (otpTimeLeft <= 0) {
-            clearInterval(otpTimer);
-            showAlert('Kode OTP telah kedaluwarsa. Silakan kirim ulang.', 'error');
+        if (timeLeft <= 0) {
+            clearInterval(countdownTimer);
+            // Don't show alert, just show expired message
+            countdownElement.textContent = '00:00';
+            countdownElement.classList.add('text-red-600', 'font-bold');
             
-            // Disable OTP inputs
-            document.querySelectorAll('.otp-input').forEach(input => {
+            // Disable OTP inputs when expired
+            const otpInputs = document.querySelectorAll('.otp-input');
+            otpInputs.forEach(input => {
                 input.disabled = true;
+                input.classList.add('bg-gray-100', 'dark:bg-gray-600');
             });
             
-            document.getElementById('otpButton').disabled = true;
+            // Show message to request new OTP
+            const otpForm = document.getElementById('otpForm');
+            if (otpForm && !otpForm.querySelector('.expired-message')) {
+                const expiredMsg = document.createElement('div');
+                expiredMsg.className = 'expired-message mt-4 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg text-center';
+                expiredMsg.innerHTML = '<p class="text-red-600 dark:text-red-400 text-sm font-medium">Kode OTP telah kedaluwarsa. Silakan klik "Kirim ulang" untuk mendapatkan kode baru.</p>';
+                otpForm.appendChild(expiredMsg);
+            }
         }
         
-        otpTimeLeft--;
+        timeLeft--;
     }, 1000);
 }
 
-/**
- * Resend OTP code
- */
+// Resend OTP
 async function resendOTP() {
-    const nik = localStorage.getItem("nik");
-    const resendButton = document.getElementById('resendButton');
+    const resendBtn = document.getElementById('resendBtn');
+    const originalText = resendBtn.textContent;
     
-    if (!nik) {
-        showAlert('Sesi telah berakhir. Silakan login ulang.', 'error');
-        backToLogin();
-        return;
-    }
-    
-    // Show loading state
-    resendButton.disabled = true;
-    resendButton.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>Mengirim...';
+    resendBtn.disabled = true;
+    resendBtn.textContent = 'Mengirim...';
     
     try {
-        const response = await fetch(API_URL, {
+        const nik = localStorage.getItem("nik");
+        
+        // Call API
+        const res = await fetch(API_URL, {
             method: "POST",
             headers: {"Content-Type": "application/json"},
             body: JSON.stringify({ action: "resend-otp", nik })
         });
 
-        const data = await response.json();
+        const data = await res.json();
+        alert(data.message);
         
         if (data.success) {
-            // Increment resend count
-            resendCount++;
+            // Clear existing OTP inputs and re-enable them
+            document.querySelectorAll('.otp-input').forEach(input => {
+                input.value = '';
+                input.disabled = false;
+                input.classList.remove('bg-gray-100', 'dark:bg-gray-600');
+            });
+            document.querySelector('.otp-input').focus();
             
-            // Calculate new cooldown time: 1 minute + (resendCount * 10 minutes)
-            resendCooldownTime = 60 + (resendCount * 600); // 600 seconds = 10 minutes
+            // Remove expired message if exists
+            const expiredMsg = document.querySelector('.expired-message');
+            if (expiredMsg) {
+                expiredMsg.remove();
+            }
             
-            showAlert(`OTP berhasil dikirim ulang. Tunggu ${formatCooldownTime(resendCooldownTime)} untuk kirim ulang berikutnya.`, 'success');
+            // Reset countdown display
+            const countdownElement = document.getElementById('countdown');
+            if (countdownElement) {
+                countdownElement.classList.remove('text-red-600', 'font-bold');
+            }
             
-            // Start cooldown with progressive time
+            // Restart countdown
+            if (countdownTimer) {
+                clearInterval(countdownTimer);
+            }
+            startCountdown();
+            
+            // Apply progressive cooldown - starts at 1 minute, then increases to 10 minutes
             startResendCooldown(resendCooldownTime);
             
-            // Restart OTP timer
-            startOTPTimer();
+            // Increase cooldown time for next resend (10 minutes = 600 seconds)
+            resendCooldownTime = 600;
         } else {
-            // Reset button if failed
-            resendButton.disabled = false;
-            resendButton.innerHTML = '<i class="fas fa-redo mr-2"></i>Kirim Ulang';
-            showAlert(data.message || 'Gagal mengirim ulang OTP', 'error');
+            // If failed, re-enable button
+            resendBtn.disabled = false;
+            resendBtn.textContent = originalText;
         }
     } catch (error) {
-        resendButton.disabled = false;
-        resendButton.innerHTML = '<i class="fas fa-redo mr-2"></i>Kirim Ulang';
-        showAlert('Terjadi kesalahan koneksi. Silakan coba lagi.', 'error');
         console.error('Resend OTP error:', error);
+        alert('Terjadi kesalahan saat mengirim ulang OTP. Silakan coba lagi.');
+        resendBtn.disabled = false;
+        resendBtn.textContent = originalText;
     }
 }
 
-/**
- * Start resend cooldown timer
- */
+// Start cooldown timer for resend button
 function startResendCooldown(seconds) {
-    const resendButton = document.getElementById('resendButton');
+    const btn = document.getElementById("resendBtn");
     clearInterval(resendTimer);
 
     let remaining = seconds;
-    resendButton.disabled = true;
-    
-    // Update button text with formatted time
-    const updateButtonText = () => {
-        const minutes = Math.floor(remaining / 60);
-        const secs = remaining % 60;
-        
-        if (minutes > 0) {
-            resendButton.innerHTML = `<i class="fas fa-clock mr-2"></i>Tunggu ${minutes}:${secs.toString().padStart(2, '0')}`;
-        } else {
-            resendButton.innerHTML = `<i class="fas fa-clock mr-2"></i>Tunggu ${secs} detik`;
-        }
-    };
-    
-    updateButtonText();
+    btn.disabled = true;
+    btn.textContent = `Tunggu ${remaining} detik...`;
 
     resendTimer = setInterval(() => {
         remaining--;
         if (remaining > 0) {
-            updateButtonText();
+            btn.textContent = `Tunggu ${remaining} detik...`;
         } else {
             clearInterval(resendTimer);
-            resendButton.disabled = false;
-            resendButton.innerHTML = '<i class="fas fa-redo mr-2"></i>Kirim Ulang';
+            btn.disabled = false;
+            btn.textContent = "Kirim ulang";
         }
     }, 1000);
 }
 
-/**
- * Format cooldown time for display
- */
-function formatCooldownTime(seconds) {
-    const minutes = Math.floor(seconds / 60);
-    const remainingSeconds = seconds % 60;
-    
-    if (minutes > 0) {
-        return `${minutes} menit ${remainingSeconds > 0 ? remainingSeconds + ' detik' : ''}`.trim();
-    } else {
-        return `${remainingSeconds} detik`;
-    }
-}
-
-/**
- * Go back to login form
- */
+// Back to login
 function backToLogin() {
-    document.getElementById('otpForm').classList.add('hidden');
-    document.getElementById('loginForm').classList.remove('hidden');
-    
-    // Clear OTP inputs and reset button state
-    document.querySelectorAll('.otp-input').forEach(input => {
-        input.value = '';
-    });
-    
-    // Reset OTP button to disabled state
-    const otpButton = document.getElementById('otpButton');
-    if (otpButton) {
-        otpButton.disabled = true;
-        otpButton.classList.add('opacity-50', 'cursor-not-allowed');
-        otpButton.classList.remove('hover:from-green-700', 'hover:to-teal-700', 'transform', 'hover:scale-105');
-    }
-    
-    // Clear timers
-    if (otpTimer) {
-        clearInterval(otpTimer);
+    // Clear all timers
+    if (countdownTimer) {
+        clearInterval(countdownTimer);
     }
     if (resendTimer) {
         clearInterval(resendTimer);
     }
     
-    // Reset resend cooldown system
-    resendCount = 0;
+    // Reset resend button and cooldown time
+    const resendBtn = document.getElementById('resendBtn');
+    if (resendBtn) {
+        resendBtn.disabled = false;
+        resendBtn.textContent = 'Kirim ulang';
+    }
+    
+    // Reset cooldown time to initial value
     resendCooldownTime = 60;
     
-    // Reset resend button
-    const resendButton = document.getElementById('resendButton');
-    if (resendButton) {
-        resendButton.disabled = false;
-        resendButton.innerHTML = '<i class="fas fa-redo mr-2"></i>Kirim Ulang';
+    // Clear stored data
+    localStorage.removeItem('nik');
+    localStorage.removeItem('userEmail');
+    
+    document.getElementById('otpForm').classList.add('hidden');
+    document.getElementById('loginForm').classList.remove('hidden');
+    
+    // Clear OTP inputs
+    document.querySelectorAll('.otp-input').forEach(input => {
+        input.value = '';
+    });
+    
+    // Reset email display
+    const emailElement = document.getElementById('userEmail');
+    if (emailElement) {
+        emailElement.textContent = 'Loading...';
     }
-    
-    // Generate new captcha when returning to login
-    generateCaptcha();
-    
-    currentUser = null;
 }
 
-// ===== UTILITY FUNCTIONS =====
+// Fetch user email from NIK
+async function fetchUserEmail(nik) {
+    try {
+        const requestData = { action: "get-user-email", nik };
+        
+        const res = await fetch(API_URL, {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify(requestData)
+        });
 
-/**
- * Mask email for display
- */
+        const data = await res.json();
+        
+        if (data.success && data.email) {
+            localStorage.setItem("userEmail", data.email);
+            updateEmailDisplay(data.email);
+        } else {
+            // Show loading state instead of fallback
+            updateEmailDisplay("Mengambil data email...");
+            
+            // Try alternative approach - get from login response
+            const storedUser = localStorage.getItem('user');
+            if (storedUser) {
+                try {
+                    const userData = JSON.parse(storedUser);
+                    if (userData.email) {
+                        updateEmailDisplay(userData.email);
+                        return;
+                    }
+                } catch (e) {
+                    // Silent error handling
+                }
+            }
+            
+            // Final fallback
+            updateEmailDisplay("Email tidak ditemukan");
+        }
+    } catch (error) {
+        updateEmailDisplay("Gagal mengambil email");
+    }
+}
+
+// Email masking function
 function maskEmail(email) {
-    // Handle case where email might not contain @
     if (!email || !email.includes('@')) {
-        return 'email yang terdaftar';
+        return email;
     }
     
-    const [username, domain] = email.split('@');
+    const [localPart, domain] = email.split('@');
     
-    // Handle very short usernames
-    if (username.length <= 2) {
-        const maskedUsername = username.charAt(0) + '*';
-        return maskedUsername + '@' + domain;
-    }
-    
-    // Normal masking for longer usernames
-    const maskedUsername = username.charAt(0) + '*'.repeat(username.length - 2) + username.charAt(username.length - 1);
-    return maskedUsername + '@' + domain;
-}
-
-/**
- * Show login loading state
- */
-function showLoginLoading(show) {
-    const button = document.getElementById('loginButton');
-    const buttonText = document.getElementById('loginButtonText');
-    const buttonLoading = document.getElementById('loginButtonLoading');
-    
-    if (show) {
-        button.disabled = true;
-        buttonText.classList.add('hidden');
-        buttonLoading.classList.remove('hidden');
+    if (localPart.length <= 4) {
+        // For short emails (4 chars or less), show first char + asterisks + @domain
+        return localPart.charAt(0) + '***@' + domain;
     } else {
-        button.disabled = false;
-        buttonText.classList.remove('hidden');
-        buttonLoading.classList.add('hidden');
+        // For longer emails, show first 2 chars + asterisks + last 2 chars + @domain
+        const firstTwo = localPart.substring(0, 2);
+        const lastTwo = localPart.substring(localPart.length - 2);
+        const middleLength = localPart.length - 4;
+        const asterisks = '*'.repeat(middleLength);
+        
+        return firstTwo + asterisks + lastTwo + '@' + domain;
     }
 }
 
-/**
- * Show OTP loading state
- */
-function showOTPLoading(show) {
-    const button = document.getElementById('otpButton');
-    const buttonText = document.getElementById('otpButtonText');
-    const buttonLoading = document.getElementById('otpButtonLoading');
-    
-    if (show) {
-        button.disabled = true;
-        buttonText.classList.add('hidden');
-        buttonLoading.classList.remove('hidden');
+// Update email display with masking
+function updateEmailDisplay(email) {
+    const emailElement = document.getElementById('userEmail');
+    if (emailElement && email && email !== 'undefined') {
+        // Check if email contains @ symbol
+        if (email.includes('@')) {
+            // Display the masked email
+            const maskedEmail = maskEmail(email);
+            emailElement.textContent = maskedEmail;
+        } else {
+            emailElement.textContent = "Format email tidak valid";
+        }
     } else {
-        button.disabled = false;
-        buttonText.classList.remove('hidden');
-        buttonLoading.classList.add('hidden');
+        emailElement.textContent = "Email tidak tersedia";
     }
 }
 
-/**
- * Show alert notification
- */
-function showAlert(message, type) {
-    // Create alert element
-    const alert = document.createElement('div');
-    alert.className = `fixed top-4 right-4 z-50 p-4 rounded-lg shadow-lg max-w-sm transform transition-all duration-300 translate-x-full`;
+2. Script Utilitas (utils.js)
+
+// Password toggle functionality
+function togglePassword() {
+    const passwordInput = document.getElementById('password');
+    const toggleIcon = document.getElementById('passwordToggleIcon');
     
-    if (type === 'success') {
-        alert.classList.add('bg-green-500', 'text-white');
-        alert.innerHTML = `<i class="fas fa-check-circle mr-2"></i>${message}`;
-    } else if (type === 'info') {
-        alert.classList.add('bg-blue-500', 'text-white');
-        alert.innerHTML = `<i class="fas fa-info-circle mr-2"></i>${message}`;
+    if (passwordInput.type === 'password') {
+        passwordInput.type = 'text';
+        toggleIcon.classList.remove('fa-eye');
+        toggleIcon.classList.add('fa-eye-slash');
     } else {
-        alert.classList.add('bg-red-500', 'text-white');
-        alert.innerHTML = `<i class="fas fa-exclamation-circle mr-2"></i>${message}`;
-    }
-    
-    document.body.appendChild(alert);
-    
-    // Animate in
-    setTimeout(() => {
-        alert.classList.remove('translate-x-full');
-    }, 100);
-    
-    // Auto remove after 5 seconds
-    setTimeout(() => {
-        alert.classList.add('translate-x-full');
-        setTimeout(() => {
-            document.body.removeChild(alert);
-        }, 300);
-    }, 5000);
-}
-
-// ===== USER MANAGEMENT FUNCTIONS =====
-
-/**
- * Update dashboard user information
- */
-function updateDashboardUserInfo() {
-    if (!currentUser) {
-        console.log('No current user data available');
-        return;
-    }
-    
-    console.log('Updating dashboard with user data:', currentUser);
-    
-    // Extract username from various possible fields
-    const username = currentUser.Username || 
-                    currentUser.username || 
-                    currentUser.name || 
-                    currentUser.Name || 
-                    currentUser.fullName || 
-                    currentUser.full_name || 
-                    'User';
-    
-    // Extract role from various possible fields
-    const userRole = currentUser.Role || 
-                   currentUser.role || 
-                   currentUser.jabatan || 
-                   currentUser.Jabatan || 
-                   currentUser.position || 
-                   currentUser.Position || 
-                   'User';
-    
-    // Extract profile avatar URL if available
-    const profileImageUrl = currentUser.ProfilAvatar || 
-                          currentUser.profileAvatar || 
-                          currentUser.avatar || 
-                          currentUser.Avatar || 
-                          currentUser.profileImage || 
-                          currentUser.profile_image || 
-                          null;
-    
-    console.log('Extracted data:', {
-        username: username,
-        role: userRole,
-        avatar: profileImageUrl
-    });
-    
-    // Update user name in dashboard
-    const userNameElements = document.querySelectorAll('.user-name');
-    userNameElements.forEach(element => {
-        element.textContent = username;
-    });
-    
-    // Update user role
-    const userRoleElements = document.querySelectorAll('.user-role');
-    userRoleElements.forEach(element => {
-        element.textContent = userRole;
-    });
-    
-    // Update profile avatars (use image if available, otherwise generate initials)
-    if (profileImageUrl) {
-        updateProfileAvatarWithImage(profileImageUrl, username);
-    } else {
-        generateProfileAvatar(username);
+        passwordInput.type = 'password';
+        toggleIcon.classList.remove('fa-eye-slash');
+        toggleIcon.classList.add('fa-eye');
     }
 }
 
-/**
- * Update welcome message with user name
- */
-function updateWelcomeMessage() {
-    if (!currentUser) return;
+// Show dashboard
+function showDashboard() {
+    document.getElementById('loginContainer').classList.add('hidden');
+    document.getElementById('dashboardContainer').classList.remove('hidden');
     
-    const username = currentUser.Username || 
-                    currentUser.username || 
-                    currentUser.name || 
-                    currentUser.Name || 
-                    currentUser.fullName || 
-                    currentUser.full_name || 
-                    'User';
+    // Update user profile in dashboard
+    updateUserProfile();
     
-    const welcomeText = document.querySelector('#welcomePage p');
-    if (welcomeText) {
-        welcomeText.textContent = `Halo ${username}, semoga hari Anda menyenangkan!`;
-    }
+    // Change body background for dashboard
+    document.body.className = 'h-full bg-gray-50 dark:bg-gray-900 transition-colors duration-300';
 }
 
-/**
- * Update profile avatar with actual image
- */
-function updateProfileAvatarWithImage(imageUrl, fallbackName) {
-    const avatarHTML = `
-        <img id="avatar" src="https://test.bulshitman1.workers.dev/avatar?url=${encodeURIComponent(imageUrl)}" 
-             alt="Profile Avatar" 
-             class="w-full h-full rounded-full object-cover"
-             onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';"
-             onload="this.nextElementSibling.style.display='none';">
-        <div class="w-full h-full bg-blue-500 rounded-full flex items-center justify-center" style="display: none;">
-            <span class="text-white font-semibold text-sm">${getInitials(fallbackName)}</span>
-        </div>
-    `;
+// Update user profile information
+function updateUserProfile() {
+    const userDataString = localStorage.getItem('user');
+    let userData = null;
     
-    // Update desktop, mobile, and welcome page avatars
-    const profileAvatar = document.getElementById('profileAvatar');
-    const mobileProfileAvatar = document.getElementById('mobileProfileAvatar');
-    const welcomeProfileAvatar = document.getElementById('welcomeProfileAvatar');
-    
-    if (profileAvatar) {
-        profileAvatar.innerHTML = avatarHTML;
-    }
-    if (mobileProfileAvatar) {
-        mobileProfileAvatar.innerHTML = avatarHTML;
-    }
-    if (welcomeProfileAvatar) {
-        welcomeProfileAvatar.innerHTML = avatarHTML;
-    }
-}
-
-/**
- * Generate profile avatar from name initials
- */
-function generateProfileAvatar(name) {
-    const initials = getInitials(name);
-    const colors = [
-        'bg-blue-500', 'bg-green-500', 'bg-purple-500', 'bg-red-500', 
-        'bg-yellow-500', 'bg-indigo-500', 'bg-pink-500', 'bg-teal-500'
-    ];
-    
-    // Generate consistent color based on name
-    const colorIndex = name.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0) % colors.length;
-    const bgColor = colors[colorIndex];
-    
-    // Create avatar HTML
-    const avatarHTML = `
-        <div class="w-full h-full ${bgColor} rounded-full flex items-center justify-center">
-            <span class="text-white font-semibold text-sm">${initials}</span>
-        </div>
-    `;
-    
-    // Update desktop, mobile, and welcome page avatars
-    const profileAvatar = document.getElementById('profileAvatar');
-    const mobileProfileAvatar = document.getElementById('mobileProfileAvatar');
-    const welcomeProfileAvatar = document.getElementById('welcomeProfileAvatar');
-    
-    if (profileAvatar) {
-        profileAvatar.innerHTML = avatarHTML;
-    }
-    if (mobileProfileAvatar) {
-        mobileProfileAvatar.innerHTML = avatarHTML;
-    }
-    if (welcomeProfileAvatar) {
-        welcomeProfileAvatar.innerHTML = avatarHTML;
-    }
-}
-
-/**
- * Get initials from full name
- */
-function getInitials(name) {
-    if (!name) return 'U';
-    
-    const words = name.trim().split(' ');
-    if (words.length === 1) {
-        return words[0].charAt(0).toUpperCase();
-    } else if (words.length >= 2) {
-        return (words[0].charAt(0) + words[words.length - 1].charAt(0)).toUpperCase();
-    }
-    return 'U';
-}
-
-// ===== INITIALIZATION =====
-
-/**
- * Initialize authentication system
- */
-function initializeAuth() {
-    // Generate initial CAPTCHA
-    generateCaptcha();
-    
-    // Check for existing user session
-    const storedUser = localStorage.getItem('user');
-    if (storedUser) {
+    if (userDataString) {
         try {
-            currentUser = JSON.parse(storedUser);
-            console.log('Found stored user:', currentUser);
-            
-            // If user is already logged in, show dashboard
-            document.getElementById('loginContainer').classList.add('hidden');
-            document.getElementById('dashboardContainer').classList.remove('hidden');
-            
-            // Update user info
-            updateDashboardUserInfo();
-            updateWelcomeMessage();
+            userData = JSON.parse(userDataString);
         } catch (error) {
-            console.error('Error parsing stored user data:', error);
-            localStorage.removeItem('user');
+            // Silent error handling
+        }
+    }
+    
+    // Get user information with fallbacks
+    const userName = userData?.Username || localStorage.getItem('userName') || 'John Doe';
+    const userRole = userData?.Role || 'Administrator';
+    const profileAvatar = userData?.ProfilAvatar;
+    
+    // Update name displays
+    document.getElementById('userNameSidebar').textContent = userName;
+    document.getElementById('userNameMobile').textContent = userName;
+    document.getElementById('userNameWelcome').textContent = userName;
+    
+    // Update role displays
+    document.getElementById('userRoleSidebar').textContent = userRole;
+    document.getElementById('userRoleMobile').textContent = userRole;
+    
+    // Update profile images
+    updateProfileImage('sidebarProfileImage', profileAvatar);
+    updateProfileImage('mobileProfileImage', profileAvatar);
+}
+
+// Update profile image
+function updateProfileImage(elementId, avatarUrl) {
+    const profileElement = document.getElementById(elementId);
+    if (!profileElement) return;
+    
+    if (avatarUrl && avatarUrl.trim() !== '') {
+        // Create image element using your proxy service
+        const img = document.createElement('img');
+        img.src = `https://test.bulshitman1.workers.dev/avatar?url=${encodeURIComponent(avatarUrl)}`;
+        img.alt = 'Profile Avatar';
+        img.className = 'w-full h-full object-cover rounded-full';
+        
+        // Handle image load success
+        img.onload = function() {
+            profileElement.innerHTML = '';
+            profileElement.appendChild(img);
+        };
+        
+        // Handle image load error - fallback to icon
+        img.onerror = function() {
+            profileElement.innerHTML = '<i class="fas fa-user text-white text-sm"></i>';
+        };
+        
+        // Set a timeout fallback in case image takes too long
+        setTimeout(() => {
+            if (!profileElement.querySelector('img')) {
+                profileElement.innerHTML = '<i class="fas fa-user text-white text-sm"></i>';
+            }
+        }, 10000); // 10 second timeout
+    } else {
+        // No avatar URL, use default icon
+        profileElement.innerHTML = '<i class="fas fa-user text-white text-sm"></i>';
+    }
+}
+
+// Logout function
+function logout() {
+    if (confirm('Apakah Anda yakin ingin keluar?')) {
+        // Clear all stored data
+        localStorage.removeItem('userNIK');
+        localStorage.removeItem('userName');
+        localStorage.removeItem('isLoggedIn');
+        localStorage.removeItem('nik');
+        localStorage.removeItem('user');
+        localStorage.removeItem('userEmail');
+        
+        // Reset forms
+        document.getElementById('nik').value = '';
+        document.getElementById('password').value = '';
+        document.querySelectorAll('.otp-input').forEach(input => {
+            input.value = '';
+        });
+        
+        // Clear all timers
+        if (countdownTimer) {
+            clearInterval(countdownTimer);
+        }
+        if (resendTimer) {
+            clearInterval(resendTimer);
+        }
+        
+        // Reset resend button and cooldown time
+        const resendBtn = document.getElementById('resendBtn');
+        if (resendBtn) {
+            resendBtn.disabled = false;
+            resendBtn.textContent = 'Kirim ulang';
+        }
+        
+        // Reset cooldown time to initial value
+        resendCooldownTime = 60;
+        
+        // Show login container
+        document.getElementById('dashboardContainer').classList.add('hidden');
+        document.getElementById('loginContainer').classList.remove('hidden');
+        document.getElementById('otpForm').classList.add('hidden');
+        document.getElementById('loginForm').classList.remove('hidden');
+        
+        // Reset body background
+        document.body.className = 'h-full bg-gradient-to-br from-blue-50 to-indigo-100 dark:from-gray-900 dark:to-gray-800 transition-colors duration-300';
+        
+        // Reset email display
+        const emailElement = document.getElementById('userEmail');
+        if (emailElement) {
+            emailElement.textContent = 'Loading...';
         }
     }
 }
 
-// Initialize when DOM is loaded
-document.addEventListener('DOMContentLoaded', initializeAuth);
+3. Script Konfigurasi API (api-config.js)
 
-// ===== LOGOUT FUNCTION =====
+// API Configuration
+const API_CONFIG = {
+    BASE_URL: "https://test.bulshitman1.workers.dev",
+    ENDPOINTS: {
+        LOGIN: "/login",
+        VERIFY_OTP: "/verify-otp", 
+        RESEND_OTP: "/resend-otp",
+        GET_USER_EMAIL: "/get-user-email",
+        AVATAR_PROXY: "/avatar"
+    },
+    TIMEOUT: 30000, // 30 seconds
+    RETRY_ATTEMPTS: 3
+};
 
-/**
- * Logout user and clear session
- */
-function logout() {
-    if (confirm('Apakah Anda yakin ingin keluar?')) {
-        // Clear stored data
-        localStorage.removeItem('user');
-        localStorage.removeItem('nik');
-        currentUser = null;
+// API Helper Functions
+class APIClient {
+    constructor(baseURL = API_CONFIG.BASE_URL) {
+        this.baseURL = baseURL;
+    }
+
+    async request(endpoint, options = {}) {
+        const url = `${this.baseURL}${endpoint}`;
+        const config = {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                ...options.headers
+            },
+            ...options
+        };
+
+        try {
+            const response = await fetch(url, config);
+            
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            
+            return await response.json();
+        } catch (error) {
+            console.error('API request failed:', error);
+            throw error;
+        }
+    }
+
+    async login(nik, password) {
+        return this.request('', {
+            body: JSON.stringify({ 
+                action: "login", 
+                nik, 
+                password 
+            })
+        });
+    }
+
+    async verifyOTP(nik, otp) {
+        return this.request('', {
+            body: JSON.stringify({ 
+                action: "verify-otp", 
+                nik, 
+                otp 
+            })
+        });
+    }
+
+    async resendOTP(nik) {
+        return this.request('', {
+            body: JSON.stringify({ 
+                action: "resend-otp", 
+                nik 
+            })
+        });
+    }
+
+    async getUserEmail(nik) {
+        return this.request('', {
+            body: JSON.stringify({ 
+                action: "get-user-email", 
+                nik 
+            })
+        });
+    }
+
+    getAvatarURL(avatarUrl) {
+        return `${this.baseURL}/avatar?url=${encodeURIComponent(avatarUrl)}`;
+    }
+}
+
+// Create global API client instance
+const apiClient = new APIClient();
+
+4. Script Validasi (validation.js)
+
+// Validation Functions
+class Validator {
+    static validateNIK(nik) {
+        if (!nik) {
+            return { valid: false, message: 'NIK tidak boleh kosong' };
+        }
         
-        // Clear timers
-        if (otpTimer) clearInterval(otpTimer);
-        if (resendTimer) clearInterval(resendTimer);
+        if (nik.length !== 16) {
+            return { valid: false, message: 'NIK harus terdiri dari 16 digit' };
+        }
         
-        // Reset resend cooldown system
-        resendCount = 0;
-        resendCooldownTime = 60;
+        if (!/^\d+$/.test(nik)) {
+            return { valid: false, message: 'NIK hanya boleh berisi angka' };
+        }
         
-        // Reset forms
-        document.getElementById('nikLogin').value = '';
-        document.getElementById('passwordLogin').value = '';
-        document.getElementById('captchaInput').value = '';
-        document.querySelectorAll('.otp-input').forEach(input => {
-            input.value = '';
-            input.disabled = false;
+        return { valid: true, message: 'NIK valid' };
+    }
+
+    static validatePassword(password) {
+        if (!password) {
+            return { valid: false, message: 'Password tidak boleh kosong' };
+        }
+        
+        if (password.length < 6) {
+            return { valid: false, message: 'Password minimal 6 karakter' };
+        }
+        
+        return { valid: true, message: 'Password valid' };
+    }
+
+    static validateOTP(otp) {
+        if (!otp) {
+            return { valid: false, message: 'Kode OTP tidak boleh kosong' };
+        }
+        
+        if (otp.length !== 6) {
+            return { valid: false, message: 'Kode OTP harus 6 digit' };
+        }
+        
+        if (!/^\d+$/.test(otp)) {
+            return { valid: false, message: 'Kode OTP hanya boleh berisi angka' };
+        }
+        
+        return { valid: true, message: 'Kode OTP valid' };
+    }
+
+    static validateEmail(email) {
+        if (!email) {
+            return { valid: false, message: 'Email tidak boleh kosong' };
+        }
+        
+        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        if (!emailRegex.test(email)) {
+            return { valid: false, message: 'Format email tidak valid' };
+        }
+        
+        return { valid: true, message: 'Email valid' };
+    }
+}
+
+// Form validation helpers
+function showFieldError(fieldId, message) {
+    const field = document.getElementById(fieldId);
+    if (!field) return;
+    
+    // Remove existing error
+    const existingError = field.parentNode.querySelector('.field-error');
+    if (existingError) {
+        existingError.remove();
+    }
+    
+    // Add error styling
+    field.classList.add('border-red-500', 'focus:ring-red-500');
+    field.classList.remove('border-gray-300', 'focus:ring-blue-500');
+    
+    // Add error message
+    const errorDiv = document.createElement('div');
+    errorDiv.className = 'field-error mt-1 text-sm text-red-600 dark:text-red-400';
+    errorDiv.textContent = message;
+    field.parentNode.appendChild(errorDiv);
+}
+
+function clearFieldError(fieldId) {
+    const field = document.getElementById(fieldId);
+    if (!field) return;
+    
+    // Remove error styling
+    field.classList.remove('border-red-500', 'focus:ring-red-500');
+    field.classList.add('border-gray-300', 'focus:ring-blue-500');
+    
+    // Remove error message
+    const existingError = field.parentNode.querySelector('.field-error');
+    if (existingError) {
+        existingError.remove();
+    }
+}
+
+function validateLoginForm() {
+    const nik = document.getElementById('nik').value;
+    const password = document.getElementById('password').value;
+    
+    let isValid = true;
+    
+    // Clear previous errors
+    clearFieldError('nik');
+    clearFieldError('password');
+    
+    // Validate NIK
+    const nikValidation = Validator.validateNIK(nik);
+    if (!nikValidation.valid) {
+        showFieldError('nik', nikValidation.message);
+        isValid = false;
+    }
+    
+    // Validate Password
+    const passwordValidation = Validator.validatePassword(password);
+    if (!passwordValidation.valid) {
+        showFieldError('password', passwordValidation.message);
+        isValid = false;
+    }
+    
+    return isValid;
+}
+
+function validateOTPForm() {
+    const otpInputs = document.querySelectorAll('.otp-input');
+    const otp = Array.from(otpInputs).map(input => input.value).join('');
+    
+    const otpValidation = Validator.validateOTP(otp);
+    
+    if (!otpValidation.valid) {
+        // Highlight OTP inputs with error
+        otpInputs.forEach(input => {
+            input.classList.add('border-red-500', 'focus:ring-red-500');
+            input.classList.remove('border-gray-300', 'focus:ring-blue-500');
         });
         
-        // Reset OTP button state
-        const otpButton = document.getElementById('otpButton');
-        if (otpButton) otpButton.disabled = false;
-        
-        // Generate new captcha
-        generateCaptcha();
-        
-        // Hide dashboard and show login with smooth transition
-        const dashboardContainer = document.getElementById('dashboardContainer');
-        const loginContainer = document.getElementById('loginContainer');
-        
-        dashboardContainer.style.opacity = '1';
-        dashboardContainer.style.transition = 'opacity 0.3s ease-out';
-        dashboardContainer.style.opacity = '0';
-        
-        setTimeout(() => {
-            dashboardContainer.classList.add('hidden');
-            loginContainer.classList.remove('hidden');
-            document.getElementById('otpForm').classList.add('hidden');
-            document.getElementById('loginForm').classList.remove('hidden');
-            
-            // Fade in login container
-            loginContainer.style.opacity = '0';
-            loginContainer.style.transition = 'opacity 0.3s ease-in';
-            setTimeout(() => {
-                loginContainer.style.opacity = '1';
-            }, 50);
-        }, 300);
-        
-        showAlert('Anda telah berhasil keluar', 'success');
+        // Show error message
+        alert(otpValidation.message);
+        return false;
     }
+    
+    // Clear error styling
+    otpInputs.forEach(input => {
+        input.classList.remove('border-red-500', 'focus:ring-red-500');
+        input.classList.add('border-gray-300', 'focus:ring-blue-500');
+    });
+    
+    return true;
+}
+
+5. Script Konstanta (constants.js)
+
+// Application Constants
+const APP_CONSTANTS = {
+    // Timer settings
+    OTP_COUNTDOWN_SECONDS: 60, // 1 minute
+    INITIAL_RESEND_COOLDOWN: 60, // 1 minute
+    EXTENDED_RESEND_COOLDOWN: 600, // 10 minutes
+    
+    // Validation rules
+    NIK_LENGTH: 16,
+    MIN_PASSWORD_LENGTH: 6,
+    OTP_LENGTH: 6,
+    
+    // Local storage keys
+    STORAGE_KEYS: {
+        NIK: 'nik',
+        USER_EMAIL: 'userEmail',
+        USER_DATA: 'user',
+        USER_NIK: 'userNIK',
+        USER_NAME: 'userName',
+        IS_LOGGED_IN: 'isLoggedIn'
+    },
+    
+    // CSS classes
+    CSS_CLASSES: {
+        HIDDEN: 'hidden',
+        ERROR_BORDER: 'border-red-500',
+        ERROR_RING: 'focus:ring-red-500',
+        SUCCESS_BORDER: 'border-green-500',
+        SUCCESS_RING: 'focus:ring-green-500',
+        DEFAULT_BORDER: 'border-gray-300',
+        DEFAULT_RING: 'focus:ring-blue-500'
+    },
+    
+    // Messages
+    MESSAGES: {
+        NIK_REQUIRED: 'NIK tidak boleh kosong',
+        NIK_INVALID_LENGTH: 'NIK harus terdiri dari 16 digit',
+        NIK_INVALID_FORMAT: 'NIK hanya boleh berisi angka',
+        PASSWORD_REQUIRED: 'Password tidak boleh kosong',
+        PASSWORD_TOO_SHORT: 'Password minimal 6 karakter',
+        OTP_REQUIRED: 'Kode OTP tidak boleh kosong',
+        OTP_INVALID_LENGTH: 'Kode OTP harus 6 digit',
+        OTP_INVALID_FORMAT: 'Kode OTP hanya boleh berisi angka',
+        OTP_EXPIRED: 'Kode OTP telah kedaluwarsa. Silakan klik "Kirim ulang" untuk mendapatkan kode baru.',
+        LOGIN_ERROR: 'Terjadi kesalahan saat login. Silakan coba lagi.',
+        OTP_ERROR: 'Terjadi kesalahan saat verifikasi OTP. Silakan coba lagi.',
+        RESEND_ERROR: 'Terjadi kesalahan saat mengirim ulang OTP. Silakan coba lagi.',
+        LOGOUT_CONFIRM: 'Apakah Anda yakin ingin keluar?'
+    }
+};
+
+// Export constants for use in other files
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = APP_CONSTANTS;
 }
