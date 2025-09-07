@@ -1,729 +1,928 @@
-// ===== LOGIN & OTP SYSTEM FOR GITHUB =====
-// Complete JavaScript for Login, OTP Verification, and User Management
-
-// === GLOBAL VARIABLES ===
-const API_URL = "https://test.bulshitman1.workers.dev";
-let resendTimer = null;
-let otpCountdown = null;
-let resendAttempts = 0; // Track number of resend attempts
-
-// === NOTIFICATION SYSTEM ===
-function showNotification(message, type = 'info', duration = 5000) {
-    const container = document.getElementById('notificationContainer');
-    if (!container) return;
+// Login System Module
+const LoginSystem = (function() {
+    'use strict';
     
-    const notification = document.createElement('div');
-    const notificationId = 'notification-' + Date.now();
-    notification.id = notificationId;
+    // ===== CONFIGURATION =====
+    const CONFIG = {
+        API_URL: "https://test.bulshitman1.workers.dev",
+        OTP_EXPIRY_TIME: 60, // seconds
+        RESEND_COOLDOWNS: [60, 600, 1800, 3600] // Progressive cooldown in seconds
+    };
     
-    let bgColor, textColor, icon;
-    switch (type) {
-        case 'success':
-            bgColor = 'bg-green-500';
-            textColor = 'text-white';
-            icon = 'fas fa-check-circle';
-            break;
-        case 'error':
-            bgColor = 'bg-red-500';
-            textColor = 'text-white';
-            icon = 'fas fa-exclamation-circle';
-            break;
-        case 'warning':
-            bgColor = 'bg-yellow-500';
-            textColor = 'text-white';
-            icon = 'fas fa-exclamation-triangle';
-            break;
-        default:
-            bgColor = 'bg-blue-500';
-            textColor = 'text-white';
-            icon = 'fas fa-info-circle';
-    }
+    // ===== PRIVATE VARIABLES =====
+    let currentUser = null;
+    let resendTimer = null;
+    let otpExpiryTimer = null;
+    let resendAttempts = 0;
+    let otpExpiryTime = CONFIG.OTP_EXPIRY_TIME;
     
-    notification.className = `${bgColor} ${textColor} px-4 py-3 rounded-lg shadow-lg flex items-center space-x-3 transform translate-x-full transition-transform duration-300 max-w-sm`;
-    notification.innerHTML = `
-        <i class="${icon}"></i>
-        <span class="flex-1 text-sm font-medium">${message}</span>
-        <button onclick="removeNotification('${notificationId}')" class="text-white hover:text-gray-200 transition-colors duration-200">
-            <i class="fas fa-times text-sm"></i>
-        </button>
-    `;
-    
-    container.appendChild(notification);
-    
-    // Trigger animation
-    setTimeout(() => {
-        notification.classList.remove('translate-x-full');
-    }, 100);
-    
-    // Auto remove
-    setTimeout(() => {
-        removeNotification(notificationId);
-    }, duration);
-}
-
-function removeNotification(notificationId) {
-    const notification = document.getElementById(notificationId);
-    if (notification) {
-        notification.classList.add('translate-x-full');
-        setTimeout(() => {
-            if (notification.parentNode) {
-                notification.parentNode.removeChild(notification);
-            }
-        }, 300);
-    }
-}
-
-// === INITIALIZATION ===
-document.addEventListener('DOMContentLoaded', function() {
-    initializeDarkMode();
-    addInputFeedback();
-    
-    // Check if user is already logged in
-    if (localStorage.getItem('isLoggedIn') === 'true') {
-        const userData = JSON.parse(localStorage.getItem('user') || '{}');
-        showDashboard();
-        updateUserInfo(userData);
-    } else {
-        showSection('login-form');
-    }
-});
-
-// === DARK MODE FUNCTIONALITY ===
-function initializeDarkMode() {
-    const darkModeToggle = document.getElementById('darkModeToggle');
-    const dashboardDarkModeToggle = document.getElementById('dashboardDarkModeToggle');
-    const html = document.documentElement;
-    
-    // Check for saved theme preference or default to light mode
-    const currentTheme = localStorage.getItem('theme') || 'light';
-    if (currentTheme === 'dark') {
-        html.classList.add('dark');
-    }
-
-    // Update icons based on current theme
-    function updateThemeIcons() {
-        const moonIcon = document.getElementById('moonIcon');
-        const sunIcon = document.getElementById('sunIcon');
-        const dashboardMoonIcon = document.getElementById('dashboardMoonIcon');
-        const dashboardSunIcon = document.getElementById('dashboardSunIcon');
+    // ===== UTILITY FUNCTIONS =====
+    function maskEmail(email) {
+        if (!email || typeof email !== 'string' || !email.includes('@')) {
+            return 'email@domain.com';
+        }
         
-        if (html.classList.contains('dark')) {
-            if (moonIcon) moonIcon.style.display = 'none';
-            if (sunIcon) sunIcon.style.display = 'inline';
-            if (dashboardMoonIcon) dashboardMoonIcon.style.display = 'none';
-            if (dashboardSunIcon) dashboardSunIcon.style.display = 'inline';
+        const [localPart, domain] = email.split('@');
+        if (!localPart || !domain) {
+            return 'email@domain.com';
+        }
+        
+        let maskedLocal;
+        if (localPart.length <= 2) {
+            maskedLocal = '*'.repeat(localPart.length);
+        } else if (localPart.length <= 4) {
+            maskedLocal = localPart[0] + '*'.repeat(localPart.length - 2) + localPart[localPart.length - 1];
         } else {
-            if (moonIcon) moonIcon.style.display = 'inline';
-            if (sunIcon) sunIcon.style.display = 'none';
-            if (dashboardMoonIcon) dashboardMoonIcon.style.display = 'inline';
-            if (dashboardSunIcon) dashboardSunIcon.style.display = 'none';
-        }
-    }
-    
-    // Set initial icon state
-    updateThemeIcons();
-
-    // Dark mode toggle handlers
-    function toggleDarkMode() {
-        html.classList.toggle('dark');
-        const theme = html.classList.contains('dark') ? 'dark' : 'light';
-        localStorage.setItem('theme', theme);
-        updateThemeIcons();
-    }
-
-    if (darkModeToggle) {
-        darkModeToggle.addEventListener('click', toggleDarkMode);
-    }
-    if (dashboardDarkModeToggle) {
-        dashboardDarkModeToggle.addEventListener('click', toggleDarkMode);
-    }
-}
-
-// === SECTION MANAGEMENT ===
-function showSection(sectionId) {
-    // Hide all sections
-    document.getElementById('loginContainer').style.display = 'none';
-    document.getElementById('dashboardContainer').style.display = 'none';
-    
-    if (sectionId === 'login-form') {
-        document.getElementById('loginContainer').style.display = 'flex';
-        document.getElementById('loginForm').style.display = 'block';
-        document.getElementById('otpForm').style.display = 'none';
-    } else if (sectionId === 'otp-form') {
-        document.getElementById('loginContainer').style.display = 'flex';
-        document.getElementById('loginForm').style.display = 'none';
-        document.getElementById('otpForm').style.display = 'block';
-        
-        // Start OTP countdown
-        startOTPCountdown(60);
-    } else if (sectionId === 'dashboard') {
-        document.getElementById('dashboardContainer').style.display = 'block';
-    }
-}
-
-function showDashboard() {
-    showSection('dashboard');
-    localStorage.setItem('isLoggedIn', 'true');
-    
-    // Update user info in dashboard
-    const userData = JSON.parse(localStorage.getItem('user') || '{}');
-    updateUserInfo(userData);
-}
-
-// === EMAIL MASKING FUNCTION ===
-function maskEmail(email) {
-    if (!email || !email.includes('@')) {
-        return email;
-    }
-    
-    const [localPart, domain] = email.split('@');
-    
-    if (localPart.length <= 2) {
-        // For very short local parts, show first character + asterisks
-        return localPart[0] + '*'.repeat(Math.max(1, localPart.length - 1)) + '@' + domain;
-    } else if (localPart.length <= 4) {
-        // For short local parts, show first 2 characters
-        return localPart.substring(0, 2) + '*'.repeat(localPart.length - 2) + '@' + domain;
-    } else {
-        // For longer local parts, show first 3 characters and last 1
-        const maskedLength = localPart.length - 4;
-        return localPart.substring(0, 3) + '*'.repeat(Math.max(1, maskedLength)) + localPart.slice(-1) + '@' + domain;
-    }
-}
-
-// === USER INFO UPDATE ===
-function updateUserInfo(userData) {
-    const userName = userData.Username || userData.Nama || userData.name || 'John Doe';
-    const userRole = userData.Role || userData.Jabatan || userData.role || 'Administrator';
-    const userEmail = userData.Email || userData.email || userData.Email_Pengguna || userData.EmailPengguna || 'user@example.com';
-    const profileAvatar = userData.ProfilAvatar || null;
-    
-    // Update all user name elements
-    const userNameElements = [
-        'userNameSidebar', 'userNameMobile', 'userNameWelcome'
-    ];
-    userNameElements.forEach(id => {
-        const element = document.getElementById(id);
-        if (element) element.textContent = userName;
-    });
-    
-    // Update role elements
-    const userRoleElements = ['userRoleSidebar', 'userRoleMobile'];
-    userRoleElements.forEach(id => {
-        const element = document.getElementById(id);
-        if (element) element.textContent = userRole;
-    });
-    
-    // Update profile images
-    const profileImageElements = ['sidebarProfileImage', 'mobileProfileImage'];
-    profileImageElements.forEach(id => {
-        const element = document.getElementById(id);
-        if (element) {
-            if (profileAvatar && profileAvatar.trim() !== '') {
-                // Use custom avatar URL format
-                const avatarUrl = `https://test.bulshitman1.workers.dev/avatar?url=${encodeURIComponent(profileAvatar)}`;
-                element.innerHTML = `<img id="avatar" src="${avatarUrl}" alt="Profile" class="w-full h-full object-cover rounded-full" onerror="this.style.display='none'; this.parentElement.innerHTML='<i class=\\"fas fa-user text-white text-sm\\"></i>';">`;
-                element.classList.remove('bg-gradient-to-r', 'from-blue-500', 'to-purple-600');
-                element.classList.add('bg-gray-200', 'dark:bg-gray-600');
-            } else {
-                // Fallback to icon
-                element.innerHTML = '<i class="fas fa-user text-white text-sm"></i>';
-                element.classList.add('bg-gradient-to-r', 'from-blue-500', 'to-purple-600');
-                element.classList.remove('bg-gray-200', 'dark:bg-gray-600');
-            }
-        }
-    });
-    
-    // Update email in OTP form with masking - prioritize stored email from login
-    const userEmailElement = document.getElementById('userEmail');
-    if (userEmailElement) {
-        const storedEmail = localStorage.getItem('userEmail');
-        const tempUserData = localStorage.getItem('tempUser');
-        
-        let displayEmail = storedEmail;
-        
-        // If no stored email, try to get from temp user data
-        if (!displayEmail && tempUserData) {
-            try {
-                const tempUser = JSON.parse(tempUserData);
-                displayEmail = tempUser.Email || tempUser.email || tempUser.Email_Pengguna || tempUser.EmailPengguna || tempUser.user_email;
-            } catch (e) {
-                console.log('Error parsing temp user data:', e);
-            }
+            maskedLocal = localPart.substring(0, 2) + '*'.repeat(Math.max(3, localPart.length - 4)) + localPart.substring(localPart.length - 2);
         }
         
-        // Final fallback
-        if (!displayEmail) {
-            displayEmail = userEmail;
+        return `${maskedLocal}@${domain}`;
+    }
+
+    function showInlineMessage(containerId, message, type = 'success') {
+        const container = document.getElementById(containerId);
+        if (!container) return;
+
+        // Remove existing message
+        const existingMessage = container.querySelector('.inline-message');
+        if (existingMessage) {
+            existingMessage.remove();
         }
+
+        const messageDiv = document.createElement('div');
+        messageDiv.className = `inline-message mb-4 p-3 rounded-lg border ${
+            type === 'success' 
+                ? 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800 text-green-800 dark:text-green-200' 
+                : type === 'error' 
+                ? 'bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800 text-red-800 dark:text-red-200'
+                : 'bg-blue-50 dark:bg-blue-900/20 border-blue-200 dark:border-blue-800 text-blue-800 dark:text-blue-200'
+        }`;
         
-        // Apply email masking for privacy
-        const maskedEmail = maskEmail(displayEmail);
-        userEmailElement.textContent = maskedEmail;
-    }
-}
+        messageDiv.innerHTML = `
+            <div class="flex items-center">
+                <i class="fas ${type === 'success' ? 'fa-check-circle' : type === 'error' ? 'fa-exclamation-circle' : 'fa-info-circle'} mr-2"></i>
+                <span class="text-sm font-medium">${message}</span>
+            </div>
+        `;
 
-// === LOADING FUNCTIONS ===
-function setButtonLoading(buttonId, iconId, textId, loadingText) {
-    const button = document.getElementById(buttonId);
-    const icon = document.getElementById(iconId);
-    const text = document.getElementById(textId);
-    
-    if (button && icon && text) {
-        button.disabled = true;
-        button.classList.add('button-loading');
-        icon.className = 'fas fa-spinner loading-spinner mr-2';
-        text.textContent = loadingText;
-    }
-}
+        // Insert at the beginning of the form
+        const form = container.querySelector('form');
+        if (form) {
+            form.insertBefore(messageDiv, form.firstChild);
+        } else {
+            container.insertBefore(messageDiv, container.firstChild);
+        }
 
-function resetButtonLoading(buttonId, iconId, textId, originalIcon, originalText) {
-    const button = document.getElementById(buttonId);
-    const icon = document.getElementById(iconId);
-    const text = document.getElementById(textId);
-    
-    if (button && icon && text) {
-        button.disabled = false;
-        button.classList.remove('button-loading');
-        icon.className = originalIcon;
-        text.textContent = originalText;
-    }
-}
-
-// === LOGIN FUNCTION ===
-async function login() {
-    const nik = document.getElementById("nik").value;
-    const password = document.getElementById("password").value;
-    
-    // Basic validation
-    if (!nik || nik.length !== 16) {
-        showNotification('NIK harus 16 digit', 'error');
-        return;
-    }
-    
-    if (!password) {
-        showNotification('Password tidak boleh kosong', 'error');
-        return;
-    }
-
-    // Set loading state
-    setButtonLoading('loginButton', 'loginIcon', 'loginText', 'Memproses...');
-
-    try {
-        const res = await fetch(API_URL, {
-            method: "POST",
-            headers: {"Content-Type": "application/json"},
-            body: JSON.stringify({ action: "login", nik, password })
-        });
-
-        const data = await res.json();
-        
-        if (data.success && data.step === "otp") {
-            localStorage.setItem("nik", nik);
-            
-            // Reset resend attempts on new login
-            resendAttempts = 0;
-            
-            // Store and display user email from login response
-            let userEmail = null;
-            if (data.user) {
-                // Try different possible email field names
-                userEmail = data.user.Email || data.user.email || data.user.Email_Pengguna || data.user.EmailPengguna || data.user.user_email;
-                
-                if (userEmail) {
-                    localStorage.setItem("userEmail", userEmail);
+        // Auto-remove success messages after 5 seconds
+        if (type === 'success') {
+            setTimeout(() => {
+                if (messageDiv.parentNode) {
+                    messageDiv.remove();
                 }
-                
-                // Store complete user data for later use
-                localStorage.setItem("tempUser", JSON.stringify(data.user));
-            }
+            }, 5000);
+        }
+    }
+
+    function clearInlineMessages(containerId) {
+        const container = document.getElementById(containerId);
+        if (!container) return;
+
+        const messages = container.querySelectorAll('.inline-message');
+        messages.forEach(message => message.remove());
+    }
+
+    function setButtonLoading(buttonId, iconId, textId, isLoading, loadingText = 'Memproses...') {
+        const button = document.getElementById(buttonId);
+        const icon = document.getElementById(iconId);
+        const text = document.getElementById(textId);
+        
+        if (!button || !icon || !text) return;
+
+        if (isLoading) {
+            button.disabled = true;
+            button.classList.add('button-loading', 'opacity-75', 'cursor-not-allowed');
+            icon.className = 'fas fa-spinner loading-spinner mr-2';
+            text.textContent = loadingText;
+        } else {
+            button.disabled = false;
+            button.classList.remove('button-loading', 'opacity-75', 'cursor-not-allowed');
+            icon.className = buttonId === 'loginButton' ? 'fas fa-sign-in-alt mr-2 text-blue-200 group-hover:text-blue-100' : 'fas fa-shield-alt mr-2';
+            text.textContent = buttonId === 'loginButton' ? 'Masuk' : 'Verifikasi OTP';
+        }
+    }
+
+    function highlightField(fieldId, hasError) {
+        const field = document.getElementById(fieldId);
+        if (!field) return;
+        
+        if (hasError) {
+            field.classList.add('border-red-500', 'ring-red-500', 'ring-1');
+            field.classList.remove('border-gray-300', 'dark:border-gray-600');
             
-            // Update email display in OTP form immediately with masking
-            const userEmailElement = document.getElementById('userEmail');
-            if (userEmailElement) {
-                if (userEmail) {
-                    const maskedEmail = maskEmail(userEmail);
-                    userEmailElement.textContent = maskedEmail;
+            // Add shake animation
+            field.style.animation = 'shake 0.5s ease-in-out';
+            setTimeout(() => {
+                field.style.animation = '';
+            }, 500);
+        } else {
+            field.classList.remove('border-red-500', 'ring-red-500', 'ring-1');
+            field.classList.add('border-gray-300', 'dark:border-gray-600');
+        }
+    }
+
+    function clearFieldErrors() {
+        const fields = ['nik', 'password'];
+        fields.forEach(fieldId => {
+            highlightField(fieldId, false);
+        });
+    }
+
+    // ===== OTP FUNCTIONS =====
+    function getOTPValue() {
+        let otpValue = '';
+        for (let i = 1; i <= 6; i++) {
+            const input = document.getElementById(`otp${i}`);
+            if (input) {
+                otpValue += input.value || '';
+            }
+        }
+        return otpValue;
+    }
+
+    function clearOTPInputs() {
+        for (let i = 1; i <= 6; i++) {
+            const input = document.getElementById(`otp${i}`);
+            if (input) {
+                input.value = '';
+                input.disabled = false;
+                input.classList.remove('opacity-50', 'cursor-not-allowed', 'border-red-500', 'ring-red-500', 'ring-1');
+                input.classList.add('border-gray-300', 'dark:border-gray-600');
+            }
+        }
+    }
+
+    function highlightOTPError() {
+        for (let i = 1; i <= 6; i++) {
+            const input = document.getElementById(`otp${i}`);
+            if (input) {
+                input.classList.add('border-red-500', 'ring-red-500', 'ring-1');
+                input.classList.remove('border-gray-300', 'dark:border-gray-600');
+            }
+        }
+    }
+
+    function disableOTPInputs(disabled) {
+        for (let i = 1; i <= 6; i++) {
+            const input = document.getElementById(`otp${i}`);
+            if (input) {
+                if (disabled) {
+                    input.disabled = true;
+                    input.classList.add('opacity-50', 'cursor-not-allowed');
                 } else {
-                    userEmailElement.textContent = 'Email terdaftar untuk NIK ini';
+                    input.disabled = false;
+                    input.classList.remove('opacity-50', 'cursor-not-allowed');
+                }
+            }
+        }
+    }
+
+    function checkOTPComplete() {
+        const otpValues = [];
+        for (let i = 1; i <= 6; i++) {
+            const input = document.getElementById(`otp${i}`);
+            if (input && input.value) {
+                otpValues.push(input.value);
+            }
+        }
+        
+        // Auto-submit when all 6 digits are entered
+        if (otpValues.length === 6) {
+            setTimeout(() => {
+                const otpForm = document.querySelector('#otpForm form');
+                if (otpForm) {
+                    const submitEvent = new Event('submit');
+                    otpForm.dispatchEvent(submitEvent);
+                }
+            }, 300);
+        }
+    }
+
+    // ===== TIMER FUNCTIONS =====
+    function startResendCooldown(seconds) {
+        const btn = document.getElementById("resendBtn");
+        if (!btn) return;
+        
+        clearInterval(resendTimer);
+
+        let remaining = seconds;
+        btn.disabled = true;
+        
+        function updateButtonText() {
+            const minutes = Math.floor(remaining / 60);
+            const secs = remaining % 60;
+            const timeText = minutes > 0 ? `${minutes}:${secs.toString().padStart(2, '0')}` : `${remaining} detik`;
+            btn.textContent = `Tunggu ${timeText}...`;
+        }
+        
+        updateButtonText();
+
+        resendTimer = setInterval(() => {
+            remaining--;
+            if (remaining > 0) {
+                updateButtonText();
+            } else {
+                clearInterval(resendTimer);
+                btn.disabled = false;
+                btn.textContent = "Kirim Ulang OTP";
+            }
+        }, 1000);
+    }
+
+    function startOtpExpiryCountdown() {
+        const countdownElement = document.getElementById("otpExpiryCountdown");
+        if (!countdownElement) return;
+        
+        clearInterval(otpExpiryTimer);
+
+        let remaining = otpExpiryTime;
+        
+        function updateCountdown() {
+            const minutes = Math.floor(remaining / 60);
+            const seconds = remaining % 60;
+            countdownElement.textContent = `${minutes}:${seconds.toString().padStart(2, '0')}`;
+            
+            if (remaining <= 10) {
+                countdownElement.parentElement.className = "mt-2 text-xs text-red-600 dark:text-red-400 font-medium animate-pulse";
+            } else if (remaining <= 30) {
+                countdownElement.parentElement.className = "mt-2 text-xs text-orange-600 dark:text-orange-400 font-medium";
+            }
+        }
+        
+        updateCountdown();
+
+        otpExpiryTimer = setInterval(() => {
+            remaining--;
+            if (remaining > 0) {
+                updateCountdown();
+            } else {
+                clearInterval(otpExpiryTimer);
+                handleOtpExpiry();
+            }
+        }, 1000);
+    }
+
+    function handleOtpExpiry() {
+        showInlineMessage('otpForm', 'Kode OTP telah kedaluarsa. Silakan minta kode baru.', 'error');
+        
+        // Disable OTP inputs and submit button
+        disableOTPInputs(true);
+        clearOTPInputs();
+        
+        const otpButton = document.getElementById('otpButton');
+        if (otpButton) {
+            otpButton.disabled = true;
+            otpButton.classList.add('opacity-50', 'cursor-not-allowed');
+        }
+        
+        // Update expiry text
+        const countdownElement = document.getElementById("otpExpiryCountdown");
+        if (countdownElement) {
+            countdownElement.textContent = "Kedaluarsa";
+            countdownElement.parentElement.className = "mt-2 text-xs text-red-600 dark:text-red-400 font-bold";
+        }
+    }
+
+    function resetOtpExpiry() {
+        // Reset OTP expiry time
+        otpExpiryTime = CONFIG.OTP_EXPIRY_TIME;
+        
+        // Re-enable OTP inputs and submit button
+        disableOTPInputs(false);
+        
+        const otpButton = document.getElementById('otpButton');
+        if (otpButton) {
+            otpButton.disabled = false;
+            otpButton.classList.remove('opacity-50', 'cursor-not-allowed');
+        }
+        
+        // Focus first OTP input
+        const firstOtpInput = document.getElementById('otp1');
+        if (firstOtpInput) {
+            firstOtpInput.focus();
+        }
+        
+        // Reset expiry text style
+        const countdownElement = document.getElementById("otpExpiryCountdown");
+        if (countdownElement) {
+            countdownElement.parentElement.className = "mt-2 text-xs text-orange-600 dark:text-orange-400 font-medium";
+        }
+        
+        // Start new countdown
+        startOtpExpiryCountdown();
+    }
+
+    function getNextResendCooldown() {
+        const index = Math.min(resendAttempts, CONFIG.RESEND_COOLDOWNS.length - 1);
+        return CONFIG.RESEND_COOLDOWNS[index];
+    }
+
+    // ===== PUBLIC API =====
+    return {
+        // Validation functions
+        validateNIK: function(input) {
+            const value = input.value.replace(/\D/g, '');
+            input.value = value;
+            
+            if (value.length > 16) {
+                input.value = value.substring(0, 16);
+            }
+        },
+
+        validateNIKOnBlur: function(input) {
+            if (input.value && input.value.length !== 16) {
+                input.classList.add('border-red-500');
+                showInlineMessage('loginForm', 'NIK harus 16 digit angka', 'error');
+            } else {
+                input.classList.remove('border-red-500');
+                clearInlineMessages('loginForm');
+            }
+        },
+
+        togglePassword: function() {
+            const passwordInput = document.getElementById('password');
+            const toggleIcon = document.getElementById('passwordToggleIcon');
+            
+            if (!passwordInput || !toggleIcon) return;
+
+            if (passwordInput.type === 'password') {
+                passwordInput.type = 'text';
+                toggleIcon.className = 'fas fa-eye-slash';
+            } else {
+                passwordInput.type = 'password';
+                toggleIcon.className = 'fas fa-eye';
+            }
+        },
+
+        // OTP input handlers
+        handleOTPInput: function(input, position) {
+            // Only allow numbers
+            const value = input.value.replace(/\D/g, '');
+            input.value = value;
+            
+            // Move to next input if current is filled
+            if (value && position < 6) {
+                const nextInput = document.getElementById(`otp${position + 1}`);
+                if (nextInput) {
+                    nextInput.focus();
                 }
             }
             
-            // Reset button before changing section
-            resetButtonLoading('loginButton', 'loginIcon', 'loginText', 'fas fa-sign-in-alt mr-2 text-blue-200 group-hover:text-blue-100', 'Masuk');
-            
-            showSection("otp-form");
-            
-            // Auto-disable resend button with cooldown (initial 60 seconds)
-            startResendCooldown(60);
-            
-            // Show success message with masked email if available
-            const successMessage = userEmail ? 
-                `Kode OTP telah dikirim ke ${maskEmail(userEmail)}` : 
-                'Kode OTP telah dikirim ke email yang terdaftar';
-            showNotification(successMessage, 'success');
-        } else {
-            resetButtonLoading('loginButton', 'loginIcon', 'loginText', 'fas fa-sign-in-alt mr-2 text-blue-200 group-hover:text-blue-100', 'Masuk');
-            showNotification(data.message || 'Login gagal', 'error');
-        }
-    } catch (error) {
-        resetButtonLoading('loginButton', 'loginIcon', 'loginText', 'fas fa-sign-in-alt mr-2 text-blue-200 group-hover:text-blue-100', 'Masuk');
-        showNotification('Terjadi kesalahan saat login. Silakan coba lagi.', 'error');
-    }
-}
+            // Check if all inputs are filled for auto-submit
+            checkOTPComplete();
+        },
 
-async function handleLogin(event) {
-    event.preventDefault();
-    await login();
-}
-
-// === OTP VERIFICATION ===
-async function verifyOtp() {
-    const nik = localStorage.getItem("nik");
-    const otpInputs = document.querySelectorAll('.otp-input');
-    const otp = Array.from(otpInputs).map(input => input.value).join('');
-    
-    if (otp.length !== 6) {
-        showNotification('Masukkan kode OTP 6 digit', 'error');
-        return;
-    }
-
-    // Set loading state
-    setButtonLoading('otpButton', 'otpIcon', 'otpText', 'Memverifikasi...');
-
-    try {
-        const res = await fetch(API_URL, {
-            method: "POST",
-            headers: {"Content-Type": "application/json"},
-            body: JSON.stringify({ action: "verify-otp", nik, otp })
-        });
-
-        const data = await res.json();
-        
-        if (data.success) {
-            localStorage.setItem("user", JSON.stringify(data.user));
-            
-            // Reset button before changing section
-            resetButtonLoading('otpButton', 'otpIcon', 'otpText', 'fas fa-shield-alt mr-2', 'Verifikasi OTP');
-            
-            showDashboard();
-            showNotification(data.message || 'Login berhasil!', 'success');
-        } else {
-            resetButtonLoading('otpButton', 'otpIcon', 'otpText', 'fas fa-shield-alt mr-2', 'Verifikasi OTP');
-            showNotification(data.message || 'Kode OTP tidak valid', 'error');
-            
-            // Clear OTP inputs on error
-            otpInputs.forEach(input => input.value = '');
-            otpInputs[0].focus();
-        }
-    } catch (error) {
-        resetButtonLoading('otpButton', 'otpIcon', 'otpText', 'fas fa-shield-alt mr-2', 'Verifikasi OTP');
-        showNotification('Terjadi kesalahan saat verifikasi OTP. Silakan coba lagi.', 'error');
-    }
-}
-
-async function handleOTPVerification(event) {
-    event.preventDefault();
-    await verifyOtp();
-}
-
-// === RESEND OTP WITH PROGRESSIVE COOLDOWN ===
-async function resendOtp() {
-    const nik = localStorage.getItem("nik");
-    const btn = document.getElementById("resendBtn");
-    
-    if (!nik) {
-        showNotification('Session expired. Please login again.', 'error');
-        backToLogin();
-        return;
-    }
-
-    // Set loading state for resend button
-    if (btn) {
-        btn.disabled = true;
-        btn.innerHTML = '<i class="fas fa-spinner loading-spinner mr-1"></i> Mengirim...';
-    }
-
-    try {
-        const res = await fetch(API_URL, {
-            method: "POST",
-            headers: {"Content-Type": "application/json"},
-            body: JSON.stringify({ action: "resend-otp", nik })
-        });
-
-        const data = await res.json();
-        showNotification(data.message || 'Kode OTP baru telah dikirim', 'success');
-
-        // Increment resend attempts
-        resendAttempts++;
-        
-        // Reset OTP expiry countdown to 1 minute (60 seconds)
-        startOTPCountdown(60);
-        
-        // Calculate progressive cooldown: 1 min, 10 min, 20 min, 30 min, etc.
-        let cooldownSeconds;
-        if (resendAttempts === 1) {
-            cooldownSeconds = 60; // 1 minute for first resend
-        } else {
-            cooldownSeconds = resendAttempts * 600; // 10 minutes * attempt number
-        }
-        
-        startResendCooldown(cooldownSeconds);
-        
-        // Show cooldown info to user
-        const cooldownMinutes = Math.floor(cooldownSeconds / 60);
-        if (cooldownMinutes > 1) {
-            showNotification(`Kode OTP baru telah dikirim. Tunggu ${cooldownMinutes} menit untuk kirim ulang berikutnya.`, 'info');
-        }
-        
-    } catch (error) {
-        showNotification('Terjadi kesalahan saat mengirim ulang OTP. Silakan coba lagi.', 'error');
-        
-        // Reset button on error
-        if (btn) {
-            btn.disabled = false;
-            btn.innerHTML = 'Kirim ulang';
-        }
-    }
-}
-
-// Alias for backward compatibility
-async function resendOTP() {
-    await resendOtp();
-}
-
-// === COOLDOWN TIMER WITH PROGRESSIVE TIMING ===
-function startResendCooldown(seconds) {
-    const btn = document.getElementById("resendBtn");
-    if (!btn) return;
-    
-    clearInterval(resendTimer);
-
-    let remaining = seconds;
-    btn.disabled = true;
-    
-    // Format initial display
-    updateCooldownDisplay(btn, remaining);
-
-    resendTimer = setInterval(() => {
-        remaining--;
-        if (remaining > 0) {
-            updateCooldownDisplay(btn, remaining);
-        } else {
-            clearInterval(resendTimer);
-            btn.disabled = false;
-            btn.innerHTML = 'Kirim ulang';
-        }
-    }, 1000);
-}
-
-function updateCooldownDisplay(btn, seconds) {
-    if (seconds >= 60) {
-        const minutes = Math.floor(seconds / 60);
-        const remainingSeconds = seconds % 60;
-        if (minutes >= 60) {
-            const hours = Math.floor(minutes / 60);
-            const remainingMinutes = minutes % 60;
-            btn.innerHTML = `Tunggu ${hours}j ${remainingMinutes}m ${remainingSeconds}d...`;
-        } else {
-            btn.innerHTML = `Tunggu ${minutes}m ${remainingSeconds}d...`;
-        }
-    } else {
-        btn.innerHTML = `Tunggu ${seconds} detik...`;
-    }
-}
-
-// === OTP COUNTDOWN ===
-function startOTPCountdown(seconds) {
-    const countdownElement = document.getElementById('countdown');
-    if (!countdownElement) return;
-    
-    clearInterval(otpCountdown);
-    
-    let remaining = seconds;
-    
-    otpCountdown = setInterval(() => {
-        const minutes = Math.floor(remaining / 60);
-        const secs = remaining % 60;
-        countdownElement.textContent = `${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
-        
-        if (remaining <= 0) {
-            clearInterval(otpCountdown);
-            countdownElement.textContent = '00:00';
-            alert('Kode OTP telah kedaluwarsa. Silakan minta kode baru.');
-        }
-        remaining--;
-    }, 1000);
-}
-
-// === UTILITY FUNCTIONS ===
-function backToLogin() {
-    showSection('login-form');
-    localStorage.removeItem('nik');
-    localStorage.removeItem('userEmail');
-    localStorage.removeItem('tempUser');
-    clearInterval(resendTimer);
-    clearInterval(otpCountdown);
-    
-    // Reset resend attempts
-    resendAttempts = 0;
-    
-    // Clear form data
-    document.getElementById('nik').value = '';
-    document.getElementById('password').value = '';
-    document.querySelectorAll('.otp-input').forEach(input => input.value = '');
-    
-    // Reset email display
-    const userEmailElement = document.getElementById('userEmail');
-    if (userEmailElement) {
-        userEmailElement.textContent = 'Loading...';
-    }
-}
-
-function togglePassword() {
-    const passwordInput = document.getElementById('password');
-    const toggleIcon = document.getElementById('passwordToggleIcon');
-    
-    if (passwordInput.type === 'password') {
-        passwordInput.type = 'text';
-        toggleIcon.classList.remove('fa-eye');
-        toggleIcon.classList.add('fa-eye-slash');
-    } else {
-        passwordInput.type = 'password';
-        toggleIcon.classList.remove('fa-eye-slash');
-        toggleIcon.classList.add('fa-eye');
-    }
-}
-
-function moveToNext(current, index) {
-    if (current.value.length === 1 && index < 5) {
-        const nextInput = document.querySelectorAll('.otp-input')[index + 1];
-        if (nextInput) nextInput.focus();
-    }
-    
-    // Auto-submit when all 6 digits are entered
-    const otpInputs = document.querySelectorAll('.otp-input');
-    const otp = Array.from(otpInputs).map(input => input.value).join('');
-    if (otp.length === 6) {
-        // Small delay to ensure last digit is processed
-        setTimeout(() => {
-            const otpForm = document.querySelector('#otpForm form');
-            if (otpForm) {
-                otpForm.dispatchEvent(new Event('submit'));
-            }
-        }, 100);
-    }
-}
-
-function logout() {
-    if (confirm('Apakah Anda yakin ingin keluar?')) {
-        localStorage.removeItem('isLoggedIn');
-        localStorage.removeItem('user');
-        localStorage.removeItem('nik');
-        localStorage.removeItem('userEmail');
-        localStorage.removeItem('tempUser');
-        clearInterval(resendTimer);
-        clearInterval(otpCountdown);
-        
-        // Reset resend attempts
-        resendAttempts = 0;
-        
-        showSection('login-form');
-        
-        // Clear all form data
-        document.getElementById('nik').value = '';
-        document.getElementById('password').value = '';
-        document.querySelectorAll('.otp-input').forEach(input => input.value = '');
-        
-        // Reset email display
-        const userEmailElement = document.getElementById('userEmail');
-        if (userEmailElement) {
-            userEmailElement.textContent = 'Loading...';
-        }
-    }
-}
-
-// === KEYBOARD NAVIGATION FOR OTP ===
-document.addEventListener('DOMContentLoaded', function() {
-    const otpInputs = document.querySelectorAll('.otp-input');
-    
-    otpInputs.forEach((input, index) => {
-        input.addEventListener('keydown', function(e) {
+        handleOTPKeydown: function(input, event, position) {
             // Handle backspace
-            if (e.key === 'Backspace' && !input.value && index > 0) {
-                otpInputs[index - 1].focus();
+            if (event.key === 'Backspace' && !input.value && position > 1) {
+                const prevInput = document.getElementById(`otp${position - 1}`);
+                if (prevInput) {
+                    prevInput.focus();
+                    prevInput.value = '';
+                }
             }
             
-            // Handle arrow keys
-            if (e.key === 'ArrowLeft' && index > 0) {
-                otpInputs[index - 1].focus();
+            // Handle Enter key
+            if (event.key === 'Enter') {
+                event.preventDefault();
+                const otpForm = document.querySelector('#otpForm form');
+                if (otpForm) {
+                    const submitEvent = new Event('submit');
+                    otpForm.dispatchEvent(submitEvent);
+                }
             }
-            if (e.key === 'ArrowRight' && index < 5) {
-                otpInputs[index + 1].focus();
-            }
-        });
-        
-        // Only allow numbers
-        input.addEventListener('input', function(e) {
-            this.value = this.value.replace(/[^0-9]/g, '');
-        });
-    });
-});
+        },
 
-// === INPUT VALIDATION ===
-function validateNIK(input) {
-    // Only allow numbers
-    input.value = input.value.replace(/[^0-9]/g, '');
-    
-    // Remove error styling if exists
-    input.classList.remove('border-red-500', 'focus:ring-red-500');
-    input.classList.add('border-gray-300', 'dark:border-gray-600', 'focus:ring-blue-500');
-}
-
-function validateNIKOnBlur(input) {
-    if (input.value.length > 0 && input.value.length !== 16) {
-        input.classList.remove('border-gray-300', 'dark:border-gray-600', 'focus:ring-blue-500');
-        input.classList.add('border-red-500', 'focus:ring-red-500');
-        
-        // Add shake animation
-        input.style.animation = 'shake 0.5s ease-in-out';
-        setTimeout(() => {
-            input.style.animation = '';
-        }, 500);
-    }
-}
-
-function addInputFeedback() {
-    const nikInput = document.getElementById('nik');
-    const passwordInput = document.getElementById('password');
-    
-    // Add real-time feedback
-    if (nikInput) {
-        nikInput.addEventListener('input', function() {
-            const length = this.value.length;
-            const icon = this.parentElement.querySelector('i');
+        handleOTPPaste: function(event) {
+            event.preventDefault();
+            const paste = (event.clipboardData || window.clipboardData).getData('text');
+            const numbers = paste.replace(/\D/g, '').substring(0, 6);
             
-            if (length === 16) {
-                icon.className = 'fas fa-check text-green-500';
-            } else if (length > 0) {
-                icon.className = 'fas fa-id-card text-blue-500';
-            } else {
-                icon.className = 'fas fa-id-card text-gray-400';
+            // Fill each input with the pasted numbers
+            for (let i = 0; i < 6; i++) {
+                const input = document.getElementById(`otp${i + 1}`);
+                if (input) {
+                    input.value = numbers[i] || '';
+                }
             }
-        });
-    }
-    
-    if (passwordInput) {
-        passwordInput.addEventListener('input', function() {
-            const icon = this.parentElement.querySelector('.fa-lock');
             
-            if (this.value.length >= 6) {
-                icon.className = 'fas fa-lock text-green-500';
-            } else if (this.value.length > 0) {
-                icon.className = 'fas fa-lock text-blue-500';
-            } else {
-                icon.className = 'fas fa-lock text-gray-400';
+            // Focus on the last filled input or first empty one
+            const lastFilledIndex = Math.min(numbers.length, 6);
+            const targetInput = document.getElementById(`otp${lastFilledIndex}`);
+            if (targetInput) {
+                targetInput.focus();
             }
-        });
-    }
-}
+            
+            // Check if complete after paste
+            checkOTPComplete();
+        },
+
+        // Main handlers
+        handleLogin: async function(event) {
+            event.preventDefault();
+            
+            const nik = document.getElementById('nik')?.value?.trim();
+            const password = document.getElementById('password')?.value?.trim();
+            
+            // Clear previous error states
+            clearFieldErrors();
+            
+            // Validation
+            if (!nik || !password) {
+                showInlineMessage('loginForm', 'Harap isi semua field', 'error');
+                if (!nik) highlightField('nik', true);
+                if (!password) highlightField('password', true);
+                return false;
+            }
+
+            if (nik.length !== 16 || !/^\d+$/.test(nik)) {
+                showInlineMessage('loginForm', 'NIK harus 16 digit angka', 'error');
+                highlightField('nik', true);
+                return false;
+            }
+
+            if (password.length < 6) {
+                showInlineMessage('loginForm', 'Password minimal 6 karakter', 'error');
+                highlightField('password', true);
+                return false;
+            }
+
+            // Start loading state
+            setButtonLoading('loginButton', 'loginIcon', 'loginText', true, 'Memverifikasi...');
+
+            try {
+                const response = await fetch(CONFIG.API_URL, {
+                    method: "POST",
+                    headers: {"Content-Type": "application/json"},
+                    body: JSON.stringify({ action: "login", nik, password })
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+
+                const data = await response.json();
+                
+                if (data.success && data.step === "otp") {
+                    localStorage.setItem("nik", nik);
+                    
+                    // Store email from login response for masking display
+                    const userEmail = data.email || data.user?.email || data.user?.Email;
+                    if (userEmail) {
+                        localStorage.setItem("userEmail", userEmail);
+                    }
+                    
+                    showInlineMessage('loginForm', data.message || 'Login berhasil! Mengirim OTP...', 'success');
+                    
+                    // Smooth transition to OTP form
+                    setTimeout(() => {
+                        this.showOTPForm(userEmail);
+                        // Start with initial cooldown
+                        startResendCooldown(getNextResendCooldown());
+                    }, 1500);
+                } else {
+                    showInlineMessage('loginForm', data.message || 'Login gagal. Periksa NIK dan password Anda.', 'error');
+                    
+                    // Shake animation for error
+                    const loginForm = document.getElementById('loginForm');
+                    if (loginForm) {
+                        loginForm.style.animation = 'shake 0.5s ease-in-out';
+                        setTimeout(() => {
+                            loginForm.style.animation = '';
+                        }, 500);
+                    }
+                }
+            } catch (error) {
+                console.error('Login error:', error);
+                showInlineMessage('loginForm', 'Terjadi kesalahan koneksi. Silakan coba lagi.', 'error');
+            } finally {
+                // Always reset loading state
+                setTimeout(() => {
+                    setButtonLoading('loginButton', 'loginIcon', 'loginText', false);
+                }, 1000);
+            }
+            
+            return false;
+        },
+
+        handleOTPVerification: async function(event) {
+            event.preventDefault();
+            
+            const nik = localStorage.getItem("nik");
+            const otp = getOTPValue();
+            
+            if (!nik) {
+                showInlineMessage('otpForm', 'Session expired. Silakan login ulang.', 'error');
+                setTimeout(() => this.backToLogin(), 2000);
+                return false;
+            }
+            
+            if (!otp) {
+                showInlineMessage('otpForm', 'Harap masukkan kode OTP', 'error');
+                highlightOTPError();
+                document.getElementById('otp1')?.focus();
+                return false;
+            }
+            
+            if (otp.length !== 6 || !/^\d+$/.test(otp)) {
+                showInlineMessage('otpForm', 'Kode OTP harus 6 digit angka', 'error');
+                highlightOTPError();
+                document.getElementById('otp1')?.focus();
+                return false;
+            }
+
+            // Start loading state
+            setButtonLoading('otpButton', 'otpIcon', 'otpText', true, 'Memverifikasi...');
+            disableOTPInputs(true);
+
+            try {
+                const response = await fetch(CONFIG.API_URL, {
+                    method: "POST",
+                    headers: {"Content-Type": "application/json"},
+                    body: JSON.stringify({ action: "verify-otp", nik, otp })
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+
+                const data = await response.json();
+                
+                if (data.success) {
+                    // Clear OTP expiry timer immediately on success
+                    clearInterval(otpExpiryTimer);
+                    
+                    localStorage.setItem("user", JSON.stringify(data.user));
+                    showInlineMessage('otpForm', data.message || 'Verifikasi berhasil! Mengarahkan ke dashboard...', 'success');
+                    
+                    // Wait a moment to show success message, then load dashboard
+                    setTimeout(() => {
+                        this.loadDashboard(data.user);
+                    }, 1500);
+                } else {
+                    showInlineMessage('otpForm', data.message || 'Kode OTP salah. Silakan coba lagi.', 'error');
+                    
+                    // Clear OTP inputs and highlight error
+                    clearOTPInputs();
+                    highlightOTPError();
+                    document.getElementById('otp1')?.focus();
+                    
+                    // Shake animation for error
+                    const otpForm = document.getElementById('otpForm');
+                    if (otpForm) {
+                        otpForm.style.animation = 'shake 0.5s ease-in-out';
+                        setTimeout(() => {
+                            otpForm.style.animation = '';
+                        }, 500);
+                    }
+                    
+                    // Re-enable inputs after error
+                    setTimeout(() => {
+                        setButtonLoading('otpButton', 'otpIcon', 'otpText', false);
+                        disableOTPInputs(false);
+                    }, 1000);
+                }
+            } catch (error) {
+                console.error('OTP verification error:', error);
+                showInlineMessage('otpForm', 'Terjadi kesalahan koneksi. Silakan coba lagi.', 'error');
+                
+                // Re-enable inputs after error
+                setTimeout(() => {
+                    setButtonLoading('otpButton', 'otpIcon', 'otpText', false);
+                    disableOTPInputs(false);
+                }, 1000);
+            }
+            
+            return false;
+        },
+
+        resendOtp: async function() {
+            const nik = localStorage.getItem("nik");
+            const resendBtn = document.getElementById("resendBtn");
+            
+            if (!nik) {
+                showInlineMessage('otpForm', 'Session expired. Silakan login ulang.', 'error');
+                setTimeout(() => this.backToLogin(), 2000);
+                return;
+            }
+
+            if (!resendBtn || resendBtn.disabled) {
+                return; // Prevent multiple clicks
+            }
+
+            // Show loading state for resend button
+            const originalText = resendBtn.textContent;
+            resendBtn.disabled = true;
+            resendBtn.innerHTML = '<i class="fas fa-spinner loading-spinner mr-2"></i>Mengirim...';
+
+            try {
+                const response = await fetch(CONFIG.API_URL, {
+                    method: "POST",
+                    headers: {"Content-Type": "application/json"},
+                    body: JSON.stringify({ action: "resend-otp", nik })
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+
+                const data = await response.json();
+                
+                if (data.success !== false) {
+                    // Increment resend attempts
+                    resendAttempts++;
+                    
+                    // Update email if provided in resend response
+                    if (data.email) {
+                        localStorage.setItem("userEmail", data.email);
+                        // Update displayed email
+                        const maskedEmailElement = document.getElementById('maskedEmail');
+                        if (maskedEmailElement) {
+                            const maskedEmail = maskEmail(data.email);
+                            maskedEmailElement.textContent = maskedEmail;
+                        }
+                    }
+                    
+                    // Reset OTP expiry and start new countdown
+                    resetOtpExpiry();
+                    
+                    showInlineMessage('otpForm', data.message || 'OTP baru telah dikirim ke email terdaftar', 'success');
+                    
+                    // Get progressive cooldown time
+                    const cooldownTime = getNextResendCooldown();
+                    startResendCooldown(cooldownTime);
+                } else {
+                    showInlineMessage('otpForm', data.message || 'Gagal mengirim ulang OTP', 'error');
+                    
+                    // Reset button on API error
+                    setTimeout(() => {
+                        resendBtn.disabled = false;
+                        resendBtn.textContent = originalText;
+                    }, 2000);
+                }
+            } catch (error) {
+                console.error('Resend OTP error:', error);
+                showInlineMessage('otpForm', 'Terjadi kesalahan saat mengirim ulang OTP', 'error');
+                
+                // Reset button on network error
+                setTimeout(() => {
+                    resendBtn.disabled = false;
+                    resendBtn.textContent = originalText;
+                }, 2000);
+            }
+        },
+
+        // UI Functions
+        showOTPForm: function(email = null) {
+            const loginForm = document.getElementById('loginForm');
+            const otpForm = document.getElementById('otpForm');
+            const maskedEmailElement = document.getElementById('maskedEmail');
+            
+            if (!loginForm || !otpForm) return;
+
+            // Get email from parameter or localStorage
+            const userEmail = email || localStorage.getItem("userEmail");
+            
+            // Update masked email display
+            if (maskedEmailElement && userEmail) {
+                const maskedEmail = maskEmail(userEmail);
+                maskedEmailElement.textContent = maskedEmail;
+                maskedEmailElement.classList.remove('text-gray-500');
+                maskedEmailElement.classList.add('text-blue-600', 'dark:text-blue-400');
+            } else if (maskedEmailElement) {
+                maskedEmailElement.textContent = 'Email tidak ditemukan';
+                maskedEmailElement.classList.remove('text-blue-600', 'dark:text-blue-400');
+                maskedEmailElement.classList.add('text-gray-500');
+            }
+
+            loginForm.classList.add('hidden');
+            otpForm.classList.remove('hidden');
+            
+            // Start OTP expiry countdown
+            startOtpExpiryCountdown();
+            
+            // Focus first OTP input
+            const firstOtpInput = document.getElementById('otp1');
+            if (firstOtpInput) {
+                firstOtpInput.focus();
+            }
+        },
+
+        backToLogin: function() {
+            const loginForm = document.getElementById('loginForm');
+            const otpForm = document.getElementById('otpForm');
+            
+            if (!loginForm || !otpForm) return;
+
+            otpForm.classList.add('hidden');
+            loginForm.classList.remove('hidden');
+            
+            // Clear data
+            localStorage.removeItem('nik');
+            localStorage.removeItem('userEmail');
+            
+            // Clear all timers
+            clearInterval(resendTimer);
+            clearInterval(otpExpiryTimer);
+            
+            // Reset counters
+            resendAttempts = 0;
+            otpExpiryTime = CONFIG.OTP_EXPIRY_TIME;
+            
+            // Clear OTP inputs and re-enable form elements
+            clearOTPInputs();
+            
+            const otpButton = document.getElementById('otpButton');
+            if (otpButton) {
+                otpButton.disabled = false;
+                otpButton.classList.remove('opacity-50', 'cursor-not-allowed');
+            }
+            
+            // Reset resend button
+            const resendBtn = document.getElementById('resendBtn');
+            if (resendBtn) {
+                resendBtn.disabled = false;
+                resendBtn.textContent = 'Kirim Ulang OTP';
+            }
+            
+            // Reset expiry display
+            const countdownElement = document.getElementById("otpExpiryCountdown");
+            if (countdownElement) {
+                countdownElement.textContent = "1:00";
+                countdownElement.parentElement.className = "mt-2 text-xs text-orange-600 dark:text-orange-400 font-medium";
+            }
+        },
+
+        loadDashboard: function(user) {
+            const loginContainer = document.getElementById('loginContainer');
+            const dashboardContainer = document.getElementById('dashboardContainer');
+            
+            // Clear all OTP-related timers when entering dashboard
+            clearInterval(resendTimer);
+            clearInterval(otpExpiryTimer);
+            resendTimer = null;
+            otpExpiryTimer = null;
+            
+            if (loginContainer) loginContainer.classList.add('hidden');
+            if (dashboardContainer) dashboardContainer.classList.remove('hidden');
+            
+            localStorage.setItem('isLoggedIn', 'true');
+            currentUser = user;
+            
+            // Load dashboard content
+            if (typeof DashboardSystem !== 'undefined') {
+                DashboardSystem.loadDashboard(user);
+            }
+        },
+
+        logout: function() {
+            const loginContainer = document.getElementById('loginContainer');
+            const dashboardContainer = document.getElementById('dashboardContainer');
+            
+            if (loginContainer) loginContainer.classList.remove('hidden');
+            if (dashboardContainer) dashboardContainer.classList.add('hidden');
+            
+            // Clear all data
+            localStorage.removeItem('isLoggedIn');
+            localStorage.removeItem('user');
+            localStorage.removeItem('nik');
+            localStorage.removeItem('userEmail');
+            
+            // Clear all timers immediately
+            clearInterval(resendTimer);
+            clearInterval(otpExpiryTimer);
+            resendTimer = null;
+            otpExpiryTimer = null;
+            
+            // Reset counters
+            resendAttempts = 0;
+            otpExpiryTime = CONFIG.OTP_EXPIRY_TIME;
+            
+            // Reset forms
+            const loginForm = document.getElementById('loginForm');
+            const otpForm = document.getElementById('otpForm');
+            if (loginForm) loginForm.classList.remove('hidden');
+            if (otpForm) otpForm.classList.add('hidden');
+            
+            // Clear form inputs
+            const nikInput = document.getElementById('nik');
+            const passwordInput = document.getElementById('password');
+            
+            if (nikInput) nikInput.value = '';
+            if (passwordInput) passwordInput.value = '';
+            clearOTPInputs();
+            
+            currentUser = null;
+        },
+
+        // Dark mode
+        initializeDarkMode: function() {
+            const darkModeToggle = document.getElementById('darkModeToggle');
+            
+            // Check saved theme preference or default to light mode
+            const savedTheme = localStorage.getItem('theme') || 'light';
+            
+            if (savedTheme === 'dark') {
+                document.documentElement.classList.add('dark');
+                this.updateDarkModeIcons(true);
+            }
+
+            const self = this;
+            function toggleDarkMode() {
+                const isDark = document.documentElement.classList.toggle('dark');
+                localStorage.setItem('theme', isDark ? 'dark' : 'light');
+                self.updateDarkModeIcons(isDark);
+            }
+
+            if (darkModeToggle) {
+                darkModeToggle.addEventListener('click', toggleDarkMode);
+            }
+        },
+
+        updateDarkModeIcons: function(isDark) {
+            // Login page icons
+            const moonIcon = document.getElementById('moonIcon');
+            const sunIcon = document.getElementById('sunIcon');
+            
+            if (moonIcon && sunIcon) {
+                moonIcon.style.display = isDark ? 'none' : 'block';
+                sunIcon.style.display = isDark ? 'block' : 'none';
+            }
+        },
+
+        // Initialize input enhancements
+        initializeInputEnhancements: function() {
+            // Clear error states when user starts typing
+            const nikInput = document.getElementById('nik');
+            const passwordInput = document.getElementById('password');
+
+            if (nikInput) {
+                nikInput.addEventListener('input', function() {
+                    clearFieldErrors();
+                    clearInlineMessages('loginForm');
+                });
+                
+                nikInput.addEventListener('keypress', function(e) {
+                    if (e.key === 'Enter') {
+                        e.preventDefault();
+                        const passwordField = document.getElementById('password');
+                        if (passwordField) passwordField.focus();
+                    }
+                });
+            }
+
+            if (passwordInput) {
+                passwordInput.addEventListener('input', function() {
+                    clearFieldErrors();
+                    clearInlineMessages('loginForm');
+                });
+                
+                passwordInput.addEventListener('keypress', function(e) {
+                    if (e.key === 'Enter') {
+                        e.preventDefault();
+                        const loginForm = document.querySelector('#loginForm form');
+                        if (loginForm) {
+                            const submitEvent = new Event('submit');
+                            loginForm.dispatchEvent(submitEvent);
+                        }
+                    }
+                });
+            }
+        },
+
+        // Main initialization
+        init: function() {
+            // Initialize dark mode
+            this.initializeDarkMode();
+            
+            // Initialize input enhancements
+            this.initializeInputEnhancements();
+
+            // Check if user is already logged in
+            const isLoggedIn = localStorage.getItem('isLoggedIn');
+            const userData = localStorage.getItem('user');
+            
+            if (isLoggedIn === 'true' && userData) {
+                try {
+                    const user = JSON.parse(userData);
+                    this.loadDashboard(user);
+                } catch (error) {
+                    console.error('Error parsing user data:', error);
+                    localStorage.removeItem('isLoggedIn');
+                    localStorage.removeItem('user');
+                }
+            }
+
+            console.log('Login System Initialized');
+        }
+    };
+})();
