@@ -1,443 +1,176 @@
-// Global variables
-let countdownTimer;
-let timeLeft = 60; // 1 minute in seconds
+// ===== LOGIN & OTP SYSTEM FOR GITHUB =====
+// Complete JavaScript for Login, OTP Verification, and User Management
+
+// === GLOBAL VARIABLES ===
+const API_URL = "https://test.bulshitman1.workers.dev";
 let resendTimer = null;
-let resendCooldownTime = 60; // Initial cooldown time in seconds
+let otpCountdown = null;
+let resendAttempts = 0; // Track number of resend attempts
 
-// API Configuration
-const API_URL = "https://test.bulshitman1.workers.dev"; // ganti dengan URL Worker kamu
+// === NOTIFICATION SYSTEM ===
+function showNotification(message, type = 'info', duration = 5000) {
+    const container = document.getElementById('notificationContainer');
+    if (!container) return;
+    
+    const notification = document.createElement('div');
+    const notificationId = 'notification-' + Date.now();
+    notification.id = notificationId;
+    
+    let bgColor, textColor, icon;
+    switch (type) {
+        case 'success':
+            bgColor = 'bg-green-500';
+            textColor = 'text-white';
+            icon = 'fas fa-check-circle';
+            break;
+        case 'error':
+            bgColor = 'bg-red-500';
+            textColor = 'text-white';
+            icon = 'fas fa-exclamation-circle';
+            break;
+        case 'warning':
+            bgColor = 'bg-yellow-500';
+            textColor = 'text-white';
+            icon = 'fas fa-exclamation-triangle';
+            break;
+        default:
+            bgColor = 'bg-blue-500';
+            textColor = 'text-white';
+            icon = 'fas fa-info-circle';
+    }
+    
+    notification.className = `${bgColor} ${textColor} px-4 py-3 rounded-lg shadow-lg flex items-center space-x-3 transform translate-x-full transition-transform duration-300 max-w-sm`;
+    notification.innerHTML = `
+        <i class="${icon}"></i>
+        <span class="flex-1 text-sm font-medium">${message}</span>
+        <button onclick="removeNotification('${notificationId}')" class="text-white hover:text-gray-200 transition-colors duration-200">
+            <i class="fas fa-times text-sm"></i>
+        </button>
+    `;
+    
+    container.appendChild(notification);
+    
+    // Trigger animation
+    setTimeout(() => {
+        notification.classList.remove('translate-x-full');
+    }, 100);
+    
+    // Auto remove
+    setTimeout(() => {
+        removeNotification(notificationId);
+    }, duration);
+}
 
-// Wait for DOM to be fully loaded
+function removeNotification(notificationId) {
+    const notification = document.getElementById(notificationId);
+    if (notification) {
+        notification.classList.add('translate-x-full');
+        setTimeout(() => {
+            if (notification.parentNode) {
+                notification.parentNode.removeChild(notification);
+            }
+        }, 300);
+    }
+}
+
+// === INITIALIZATION ===
 document.addEventListener('DOMContentLoaded', function() {
-    initializeLoginOTP();
+    initializeDarkMode();
+    addInputFeedback();
+    
+    // Check if user is already logged in
+    if (localStorage.getItem('isLoggedIn') === 'true') {
+        const userData = JSON.parse(localStorage.getItem('user') || '{}');
+        showDashboard();
+        updateUserInfo(userData);
+    } else {
+        showSection('login-form');
+    }
 });
 
-// Initialize login and OTP functionality
-function initializeLoginOTP() {
-    // Add event listeners for forms
-    const loginForm = document.querySelector('#loginForm form');
-    const otpForm = document.querySelector('#otpForm form');
+// === DARK MODE FUNCTIONALITY ===
+function initializeDarkMode() {
+    const darkModeToggle = document.getElementById('darkModeToggle');
+    const dashboardDarkModeToggle = document.getElementById('dashboardDarkModeToggle');
+    const html = document.documentElement;
     
-    if (loginForm) {
-        loginForm.addEventListener('submit', handleLogin);
+    // Check for saved theme preference or default to light mode
+    const currentTheme = localStorage.getItem('theme') || 'light';
+    if (currentTheme === 'dark') {
+        html.classList.add('dark');
     }
-    
-    if (otpForm) {
-        otpForm.addEventListener('submit', handleOTPVerification);
-    }
-    
-    // Add event listeners for OTP inputs
-    const otpInputs = document.querySelectorAll('.otp-input');
-    otpInputs.forEach((input, index) => {
-        input.addEventListener('input', (e) => moveToNext(e.target, index));
-        input.addEventListener('keydown', (e) => handleOTPKeydown(e, index));
-    });
-}
 
-// Login form handler
-async function handleLogin(event) {
-    event.preventDefault();
-    
-    const nik = document.getElementById('nik').value;
-    const password = document.getElementById('password').value;
-    
-    // Basic validation
-    if (nik.length !== 16) {
-        alert('NIK harus terdiri dari 16 digit');
-        return;
-    }
-    
-    if (password.length < 6) {
-        alert('Password minimal 6 karakter');
-        return;
-    }
-    
-    // Show loading state
-    const submitButton = event.target.querySelector('button[type="submit"]');
-    const originalContent = submitButton.innerHTML;
-    submitButton.disabled = true;
-    submitButton.innerHTML = '<i class="fas fa-spinner fa-spin mr-2 text-blue-200"></i>Memproses...';
-    
-    try {
-        // Call API
-        const res = await fetch(API_URL, {
-            method: "POST",
-            headers: {"Content-Type": "application/json"},
-            body: JSON.stringify({ action: "login", nik, password })
-        });
-
-        const data = await res.json();
-        alert(data.message);
-
-        if (data.success && data.step === "otp") {
-            localStorage.setItem("nik", nik);
-            
-            // Get email from login response
-            let userEmail = null;
-            
-            // Check all possible email fields in response
-            if (data.email && data.email.includes('@')) {
-                userEmail = data.email;
-            } else if (data.user && data.user.email && data.user.email.includes('@')) {
-                userEmail = data.user.email;
-            } else if (data.data && data.data.email && data.data.email.includes('@')) {
-                userEmail = data.data.email;
-            } else if (data.userInfo && data.userInfo.email && data.userInfo.email.includes('@')) {
-                userEmail = data.userInfo.email;
-            } else if (data.profile && data.profile.email && data.profile.email.includes('@')) {
-                userEmail = data.profile.email;
-            }
-            
-            if (userEmail) {
-                localStorage.setItem("userEmail", userEmail);
-                updateEmailDisplay(userEmail);
-            } else {
-                // Show error message instead of trying API call
-                updateEmailDisplay("Email tidak ditemukan dalam response login");
-                
-                // Try fallback API call as last resort
-                await fetchUserEmail(nik);
-            }
-            
-            // Reset cooldown time to initial value when starting new login
-            resendCooldownTime = 60;
-            
-            // Hide login form and show OTP form
-            document.getElementById('loginForm').classList.add('hidden');
-            document.getElementById('otpForm').classList.remove('hidden');
-            
-            // Start countdown timer
-            startCountdown();
-            
-            // Auto-disable resend button with initial cooldown
-            startResendCooldown(60);
-        }
-    } catch (error) {
-        console.error('Login error:', error);
-        alert('Terjadi kesalahan saat login. Silakan coba lagi.');
-    } finally {
-        // Reset button
-        submitButton.disabled = false;
-        submitButton.innerHTML = originalContent;
-    }
-}
-
-// OTP input navigation
-function moveToNext(current, index) {
-    if (current.value.length === 1 && index < 5) {
-        const nextInput = document.querySelectorAll('.otp-input')[index + 1];
-        if (nextInput) {
-            nextInput.focus();
-        }
-    }
-    
-    // Auto-submit when all fields are filled
-    const otpInputs = document.querySelectorAll('.otp-input');
-    const allFilled = Array.from(otpInputs).every(input => input.value.length === 1);
-    if (allFilled) {
-        // Small delay to show the last digit
-        setTimeout(() => {
-            const otpForm = document.querySelector('#otpForm form');
-            if (otpForm) {
-                otpForm.dispatchEvent(new Event('submit'));
-            }
-        }, 500);
-    }
-}
-
-// Handle OTP input keydown events
-function handleOTPKeydown(event, index) {
-    const otpInputs = document.querySelectorAll('.otp-input');
-    
-    // Handle backspace
-    if (event.key === 'Backspace') {
-        if (event.target.value === '' && index > 0) {
-            otpInputs[index - 1].focus();
-        }
-    }
-    
-    // Handle arrow keys
-    if (event.key === 'ArrowLeft' && index > 0) {
-        otpInputs[index - 1].focus();
-    }
-    
-    if (event.key === 'ArrowRight' && index < 5) {
-        otpInputs[index + 1].focus();
-    }
-    
-    // Only allow numbers
-    if (!/[0-9]/.test(event.key) && !['Backspace', 'Delete', 'Tab', 'ArrowLeft', 'ArrowRight'].includes(event.key)) {
-        event.preventDefault();
-    }
-}
-
-// OTP verification handler
-async function handleOTPVerification(event) {
-    event.preventDefault();
-    
-    const otpInputs = document.querySelectorAll('.otp-input');
-    const otp = Array.from(otpInputs).map(input => input.value).join('');
-    
-    if (otp.length !== 6) {
-        alert('Silakan masukkan kode OTP 6 digit');
-        return;
-    }
-    
-    // Show loading state
-    const submitButton = event.target.querySelector('button[type="submit"]');
-    const originalContent = submitButton.innerHTML;
-    submitButton.disabled = true;
-    submitButton.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>Memverifikasi...';
-    
-    try {
-        const nik = localStorage.getItem("nik");
+    // Update icons based on current theme
+    function updateThemeIcons() {
+        const moonIcon = document.getElementById('moonIcon');
+        const sunIcon = document.getElementById('sunIcon');
+        const dashboardMoonIcon = document.getElementById('dashboardMoonIcon');
+        const dashboardSunIcon = document.getElementById('dashboardSunIcon');
         
-        // Call API
-        const res = await fetch(API_URL, {
-            method: "POST",
-            headers: {"Content-Type": "application/json"},
-            body: JSON.stringify({ action: "verify-otp", nik, otp })
-        });
-
-        const data = await res.json();
-        alert(data.message);
-
-        if (data.success) {
-            // Clear countdown timer
-            if (countdownTimer) {
-                clearInterval(countdownTimer);
-            }
-            
-            // Clear resend timer
-            if (resendTimer) {
-                clearInterval(resendTimer);
-            }
-            
-            // Store user info from API response
-            localStorage.setItem('user', JSON.stringify(data.user));
-            localStorage.setItem('userNIK', nik);
-            localStorage.setItem('userName', data.user.name || 'User');
-            localStorage.setItem('isLoggedIn', 'true');
-            
-            // Show dashboard
-            showDashboard();
-        }
-    } catch (error) {
-        console.error('OTP verification error:', error);
-        alert('Terjadi kesalahan saat verifikasi OTP. Silakan coba lagi.');
-    } finally {
-        // Reset button
-        submitButton.disabled = false;
-        submitButton.innerHTML = originalContent;
-    }
-}
-
-// Countdown timer
-function startCountdown() {
-    timeLeft = 60; // Reset to 1 minute (60 seconds)
-    const countdownElement = document.getElementById('countdown');
-    
-    countdownTimer = setInterval(() => {
-        const minutes = Math.floor(timeLeft / 60);
-        const seconds = timeLeft % 60;
-        countdownElement.textContent = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
-        
-        if (timeLeft <= 0) {
-            clearInterval(countdownTimer);
-            // Don't show alert, just show expired message
-            countdownElement.textContent = '00:00';
-            countdownElement.classList.add('text-red-600', 'font-bold');
-            
-            // Disable OTP inputs when expired
-            const otpInputs = document.querySelectorAll('.otp-input');
-            otpInputs.forEach(input => {
-                input.disabled = true;
-                input.classList.add('bg-gray-100', 'dark:bg-gray-600');
-            });
-            
-            // Show message to request new OTP
-            const otpForm = document.getElementById('otpForm');
-            if (otpForm && !otpForm.querySelector('.expired-message')) {
-                const expiredMsg = document.createElement('div');
-                expiredMsg.className = 'expired-message mt-4 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg text-center';
-                expiredMsg.innerHTML = '<p class="text-red-600 dark:text-red-400 text-sm font-medium">Kode OTP telah kedaluwarsa. Silakan klik "Kirim ulang" untuk mendapatkan kode baru.</p>';
-                otpForm.appendChild(expiredMsg);
-            }
-        }
-        
-        timeLeft--;
-    }, 1000);
-}
-
-// Resend OTP
-async function resendOTP() {
-    const resendBtn = document.getElementById('resendBtn');
-    const originalText = resendBtn.textContent;
-    
-    resendBtn.disabled = true;
-    resendBtn.textContent = 'Mengirim...';
-    
-    try {
-        const nik = localStorage.getItem("nik");
-        
-        // Call API
-        const res = await fetch(API_URL, {
-            method: "POST",
-            headers: {"Content-Type": "application/json"},
-            body: JSON.stringify({ action: "resend-otp", nik })
-        });
-
-        const data = await res.json();
-        alert(data.message);
-        
-        if (data.success) {
-            // Clear existing OTP inputs and re-enable them
-            document.querySelectorAll('.otp-input').forEach(input => {
-                input.value = '';
-                input.disabled = false;
-                input.classList.remove('bg-gray-100', 'dark:bg-gray-600');
-            });
-            document.querySelector('.otp-input').focus();
-            
-            // Remove expired message if exists
-            const expiredMsg = document.querySelector('.expired-message');
-            if (expiredMsg) {
-                expiredMsg.remove();
-            }
-            
-            // Reset countdown display
-            const countdownElement = document.getElementById('countdown');
-            if (countdownElement) {
-                countdownElement.classList.remove('text-red-600', 'font-bold');
-            }
-            
-            // Restart countdown
-            if (countdownTimer) {
-                clearInterval(countdownTimer);
-            }
-            startCountdown();
-            
-            // Apply progressive cooldown - starts at 1 minute, then increases to 10 minutes
-            startResendCooldown(resendCooldownTime);
-            
-            // Increase cooldown time for next resend (10 minutes = 600 seconds)
-            resendCooldownTime = 600;
+        if (html.classList.contains('dark')) {
+            if (moonIcon) moonIcon.style.display = 'none';
+            if (sunIcon) sunIcon.style.display = 'inline';
+            if (dashboardMoonIcon) dashboardMoonIcon.style.display = 'none';
+            if (dashboardSunIcon) dashboardSunIcon.style.display = 'inline';
         } else {
-            // If failed, re-enable button
-            resendBtn.disabled = false;
-            resendBtn.textContent = originalText;
+            if (moonIcon) moonIcon.style.display = 'inline';
+            if (sunIcon) sunIcon.style.display = 'none';
+            if (dashboardMoonIcon) dashboardMoonIcon.style.display = 'inline';
+            if (dashboardSunIcon) dashboardSunIcon.style.display = 'none';
         }
-    } catch (error) {
-        console.error('Resend OTP error:', error);
-        alert('Terjadi kesalahan saat mengirim ulang OTP. Silakan coba lagi.');
-        resendBtn.disabled = false;
-        resendBtn.textContent = originalText;
+    }
+    
+    // Set initial icon state
+    updateThemeIcons();
+
+    // Dark mode toggle handlers
+    function toggleDarkMode() {
+        html.classList.toggle('dark');
+        const theme = html.classList.contains('dark') ? 'dark' : 'light';
+        localStorage.setItem('theme', theme);
+        updateThemeIcons();
+    }
+
+    if (darkModeToggle) {
+        darkModeToggle.addEventListener('click', toggleDarkMode);
+    }
+    if (dashboardDarkModeToggle) {
+        dashboardDarkModeToggle.addEventListener('click', toggleDarkMode);
     }
 }
 
-// Start cooldown timer for resend button
-function startResendCooldown(seconds) {
-    const btn = document.getElementById("resendBtn");
-    clearInterval(resendTimer);
-
-    let remaining = seconds;
-    btn.disabled = true;
-    btn.textContent = `Tunggu ${remaining} detik...`;
-
-    resendTimer = setInterval(() => {
-        remaining--;
-        if (remaining > 0) {
-            btn.textContent = `Tunggu ${remaining} detik...`;
-        } else {
-            clearInterval(resendTimer);
-            btn.disabled = false;
-            btn.textContent = "Kirim ulang";
-        }
-    }, 1000);
-}
-
-// Back to login
-function backToLogin() {
-    // Clear all timers
-    if (countdownTimer) {
-        clearInterval(countdownTimer);
-    }
-    if (resendTimer) {
-        clearInterval(resendTimer);
-    }
+// === SECTION MANAGEMENT ===
+function showSection(sectionId) {
+    // Hide all sections
+    document.getElementById('loginContainer').style.display = 'none';
+    document.getElementById('dashboardContainer').style.display = 'none';
     
-    // Reset resend button and cooldown time
-    const resendBtn = document.getElementById('resendBtn');
-    if (resendBtn) {
-        resendBtn.disabled = false;
-        resendBtn.textContent = 'Kirim ulang';
-    }
-    
-    // Reset cooldown time to initial value
-    resendCooldownTime = 60;
-    
-    // Clear stored data
-    localStorage.removeItem('nik');
-    localStorage.removeItem('userEmail');
-    
-    document.getElementById('otpForm').classList.add('hidden');
-    document.getElementById('loginForm').classList.remove('hidden');
-    
-    // Clear OTP inputs
-    document.querySelectorAll('.otp-input').forEach(input => {
-        input.value = '';
-    });
-    
-    // Reset email display
-    const emailElement = document.getElementById('userEmail');
-    if (emailElement) {
-        emailElement.textContent = 'Loading...';
-    }
-}
-
-// Fetch user email from NIK
-async function fetchUserEmail(nik) {
-    try {
-        const requestData = { action: "get-user-email", nik };
+    if (sectionId === 'login-form') {
+        document.getElementById('loginContainer').style.display = 'flex';
+        document.getElementById('loginForm').style.display = 'block';
+        document.getElementById('otpForm').style.display = 'none';
+    } else if (sectionId === 'otp-form') {
+        document.getElementById('loginContainer').style.display = 'flex';
+        document.getElementById('loginForm').style.display = 'none';
+        document.getElementById('otpForm').style.display = 'block';
         
-        const res = await fetch(API_URL, {
-            method: "POST",
-            headers: {"Content-Type": "application/json"},
-            body: JSON.stringify(requestData)
-        });
-
-        const data = await res.json();
-        
-        if (data.success && data.email) {
-            localStorage.setItem("userEmail", data.email);
-            updateEmailDisplay(data.email);
-        } else {
-            // Show loading state instead of fallback
-            updateEmailDisplay("Mengambil data email...");
-            
-            // Try alternative approach - get from login response
-            const storedUser = localStorage.getItem('user');
-            if (storedUser) {
-                try {
-                    const userData = JSON.parse(storedUser);
-                    if (userData.email) {
-                        updateEmailDisplay(userData.email);
-                        return;
-                    }
-                } catch (e) {
-                    // Silent error handling
-                }
-            }
-            
-            // Final fallback
-            updateEmailDisplay("Email tidak ditemukan");
-        }
-    } catch (error) {
-        updateEmailDisplay("Gagal mengambil email");
+        // Start OTP countdown
+        startOTPCountdown(60);
+    } else if (sectionId === 'dashboard') {
+        document.getElementById('dashboardContainer').style.display = 'block';
     }
 }
 
-// Email masking function
+function showDashboard() {
+    showSection('dashboard');
+    localStorage.setItem('isLoggedIn', 'true');
+    
+    // Update user info in dashboard
+    const userData = JSON.parse(localStorage.getItem('user') || '{}');
+    updateUserInfo(userData);
+}
+
+// === EMAIL MASKING FUNCTION ===
 function maskEmail(email) {
     if (!email || !email.includes('@')) {
         return email;
@@ -445,40 +178,408 @@ function maskEmail(email) {
     
     const [localPart, domain] = email.split('@');
     
-    if (localPart.length <= 4) {
-        // For short emails (4 chars or less), show first char + asterisks + @domain
-        return localPart.charAt(0) + '***@' + domain;
+    if (localPart.length <= 2) {
+        // For very short local parts, show first character + asterisks
+        return localPart[0] + '*'.repeat(Math.max(1, localPart.length - 1)) + '@' + domain;
+    } else if (localPart.length <= 4) {
+        // For short local parts, show first 2 characters
+        return localPart.substring(0, 2) + '*'.repeat(localPart.length - 2) + '@' + domain;
     } else {
-        // For longer emails, show first 2 chars + asterisks + last 2 chars + @domain
-        const firstTwo = localPart.substring(0, 2);
-        const lastTwo = localPart.substring(localPart.length - 2);
-        const middleLength = localPart.length - 4;
-        const asterisks = '*'.repeat(middleLength);
-        
-        return firstTwo + asterisks + lastTwo + '@' + domain;
+        // For longer local parts, show first 3 characters and last 1
+        const maskedLength = localPart.length - 4;
+        return localPart.substring(0, 3) + '*'.repeat(Math.max(1, maskedLength)) + localPart.slice(-1) + '@' + domain;
     }
 }
 
-// Update email display with masking
-function updateEmailDisplay(email) {
-    const emailElement = document.getElementById('userEmail');
-    if (emailElement && email && email !== 'undefined') {
-        // Check if email contains @ symbol
-        if (email.includes('@')) {
-            // Display the masked email
-            const maskedEmail = maskEmail(email);
-            emailElement.textContent = maskedEmail;
+// === USER INFO UPDATE ===
+function updateUserInfo(userData) {
+    const userName = userData.Username || userData.Nama || userData.name || 'John Doe';
+    const userRole = userData.Role || userData.Jabatan || userData.role || 'Administrator';
+    const userEmail = userData.Email || userData.email || userData.Email_Pengguna || userData.EmailPengguna || 'user@example.com';
+    const profileAvatar = userData.ProfilAvatar || null;
+    
+    // Update all user name elements
+    const userNameElements = [
+        'userNameSidebar', 'userNameMobile', 'userNameWelcome'
+    ];
+    userNameElements.forEach(id => {
+        const element = document.getElementById(id);
+        if (element) element.textContent = userName;
+    });
+    
+    // Update role elements
+    const userRoleElements = ['userRoleSidebar', 'userRoleMobile'];
+    userRoleElements.forEach(id => {
+        const element = document.getElementById(id);
+        if (element) element.textContent = userRole;
+    });
+    
+    // Update profile images
+    const profileImageElements = ['sidebarProfileImage', 'mobileProfileImage'];
+    profileImageElements.forEach(id => {
+        const element = document.getElementById(id);
+        if (element) {
+            if (profileAvatar && profileAvatar.trim() !== '') {
+                // Use custom avatar URL format
+                const avatarUrl = `https://test.bulshitman1.workers.dev/avatar?url=${encodeURIComponent(profileAvatar)}`;
+                element.innerHTML = `<img id="avatar" src="${avatarUrl}" alt="Profile" class="w-full h-full object-cover rounded-full" onerror="this.style.display='none'; this.parentElement.innerHTML='<i class=\\"fas fa-user text-white text-sm\\"></i>';">`;
+                element.classList.remove('bg-gradient-to-r', 'from-blue-500', 'to-purple-600');
+                element.classList.add('bg-gray-200', 'dark:bg-gray-600');
+            } else {
+                // Fallback to icon
+                element.innerHTML = '<i class="fas fa-user text-white text-sm"></i>';
+                element.classList.add('bg-gradient-to-r', 'from-blue-500', 'to-purple-600');
+                element.classList.remove('bg-gray-200', 'dark:bg-gray-600');
+            }
+        }
+    });
+    
+    // Update email in OTP form with masking - prioritize stored email from login
+    const userEmailElement = document.getElementById('userEmail');
+    if (userEmailElement) {
+        const storedEmail = localStorage.getItem('userEmail');
+        const tempUserData = localStorage.getItem('tempUser');
+        
+        let displayEmail = storedEmail;
+        
+        // If no stored email, try to get from temp user data
+        if (!displayEmail && tempUserData) {
+            try {
+                const tempUser = JSON.parse(tempUserData);
+                displayEmail = tempUser.Email || tempUser.email || tempUser.Email_Pengguna || tempUser.EmailPengguna || tempUser.user_email;
+            } catch (e) {
+                console.log('Error parsing temp user data:', e);
+            }
+        }
+        
+        // Final fallback
+        if (!displayEmail) {
+            displayEmail = userEmail;
+        }
+        
+        // Apply email masking for privacy
+        const maskedEmail = maskEmail(displayEmail);
+        userEmailElement.textContent = maskedEmail;
+    }
+}
+
+// === LOADING FUNCTIONS ===
+function setButtonLoading(buttonId, iconId, textId, loadingText) {
+    const button = document.getElementById(buttonId);
+    const icon = document.getElementById(iconId);
+    const text = document.getElementById(textId);
+    
+    if (button && icon && text) {
+        button.disabled = true;
+        button.classList.add('button-loading');
+        icon.className = 'fas fa-spinner loading-spinner mr-2';
+        text.textContent = loadingText;
+    }
+}
+
+function resetButtonLoading(buttonId, iconId, textId, originalIcon, originalText) {
+    const button = document.getElementById(buttonId);
+    const icon = document.getElementById(iconId);
+    const text = document.getElementById(textId);
+    
+    if (button && icon && text) {
+        button.disabled = false;
+        button.classList.remove('button-loading');
+        icon.className = originalIcon;
+        text.textContent = originalText;
+    }
+}
+
+// === LOGIN FUNCTION ===
+async function login() {
+    const nik = document.getElementById("nik").value;
+    const password = document.getElementById("password").value;
+    
+    // Basic validation
+    if (!nik || nik.length !== 16) {
+        showNotification('NIK harus 16 digit', 'error');
+        return;
+    }
+    
+    if (!password) {
+        showNotification('Password tidak boleh kosong', 'error');
+        return;
+    }
+
+    // Set loading state
+    setButtonLoading('loginButton', 'loginIcon', 'loginText', 'Memproses...');
+
+    try {
+        const res = await fetch(API_URL, {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({ action: "login", nik, password })
+        });
+
+        const data = await res.json();
+        
+        if (data.success && data.step === "otp") {
+            localStorage.setItem("nik", nik);
+            
+            // Reset resend attempts on new login
+            resendAttempts = 0;
+            
+            // Store and display user email from login response
+            let userEmail = null;
+            if (data.user) {
+                // Try different possible email field names
+                userEmail = data.user.Email || data.user.email || data.user.Email_Pengguna || data.user.EmailPengguna || data.user.user_email;
+                
+                if (userEmail) {
+                    localStorage.setItem("userEmail", userEmail);
+                }
+                
+                // Store complete user data for later use
+                localStorage.setItem("tempUser", JSON.stringify(data.user));
+            }
+            
+            // Update email display in OTP form immediately with masking
+            const userEmailElement = document.getElementById('userEmail');
+            if (userEmailElement) {
+                if (userEmail) {
+                    const maskedEmail = maskEmail(userEmail);
+                    userEmailElement.textContent = maskedEmail;
+                } else {
+                    userEmailElement.textContent = 'Email terdaftar untuk NIK ini';
+                }
+            }
+            
+            // Reset button before changing section
+            resetButtonLoading('loginButton', 'loginIcon', 'loginText', 'fas fa-sign-in-alt mr-2 text-blue-200 group-hover:text-blue-100', 'Masuk');
+            
+            showSection("otp-form");
+            
+            // Auto-disable resend button with cooldown (initial 60 seconds)
+            startResendCooldown(60);
+            
+            // Show success message with masked email if available
+            const successMessage = userEmail ? 
+                `Kode OTP telah dikirim ke ${maskEmail(userEmail)}` : 
+                'Kode OTP telah dikirim ke email yang terdaftar';
+            showNotification(successMessage, 'success');
         } else {
-            emailElement.textContent = "Format email tidak valid";
+            resetButtonLoading('loginButton', 'loginIcon', 'loginText', 'fas fa-sign-in-alt mr-2 text-blue-200 group-hover:text-blue-100', 'Masuk');
+            showNotification(data.message || 'Login gagal', 'error');
+        }
+    } catch (error) {
+        resetButtonLoading('loginButton', 'loginIcon', 'loginText', 'fas fa-sign-in-alt mr-2 text-blue-200 group-hover:text-blue-100', 'Masuk');
+        showNotification('Terjadi kesalahan saat login. Silakan coba lagi.', 'error');
+    }
+}
+
+async function handleLogin(event) {
+    event.preventDefault();
+    await login();
+}
+
+// === OTP VERIFICATION ===
+async function verifyOtp() {
+    const nik = localStorage.getItem("nik");
+    const otpInputs = document.querySelectorAll('.otp-input');
+    const otp = Array.from(otpInputs).map(input => input.value).join('');
+    
+    if (otp.length !== 6) {
+        showNotification('Masukkan kode OTP 6 digit', 'error');
+        return;
+    }
+
+    // Set loading state
+    setButtonLoading('otpButton', 'otpIcon', 'otpText', 'Memverifikasi...');
+
+    try {
+        const res = await fetch(API_URL, {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({ action: "verify-otp", nik, otp })
+        });
+
+        const data = await res.json();
+        
+        if (data.success) {
+            localStorage.setItem("user", JSON.stringify(data.user));
+            
+            // Reset button before changing section
+            resetButtonLoading('otpButton', 'otpIcon', 'otpText', 'fas fa-shield-alt mr-2', 'Verifikasi OTP');
+            
+            showDashboard();
+            showNotification(data.message || 'Login berhasil!', 'success');
+        } else {
+            resetButtonLoading('otpButton', 'otpIcon', 'otpText', 'fas fa-shield-alt mr-2', 'Verifikasi OTP');
+            showNotification(data.message || 'Kode OTP tidak valid', 'error');
+            
+            // Clear OTP inputs on error
+            otpInputs.forEach(input => input.value = '');
+            otpInputs[0].focus();
+        }
+    } catch (error) {
+        resetButtonLoading('otpButton', 'otpIcon', 'otpText', 'fas fa-shield-alt mr-2', 'Verifikasi OTP');
+        showNotification('Terjadi kesalahan saat verifikasi OTP. Silakan coba lagi.', 'error');
+    }
+}
+
+async function handleOTPVerification(event) {
+    event.preventDefault();
+    await verifyOtp();
+}
+
+// === RESEND OTP WITH PROGRESSIVE COOLDOWN ===
+async function resendOtp() {
+    const nik = localStorage.getItem("nik");
+    const btn = document.getElementById("resendBtn");
+    
+    if (!nik) {
+        showNotification('Session expired. Please login again.', 'error');
+        backToLogin();
+        return;
+    }
+
+    // Set loading state for resend button
+    if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fas fa-spinner loading-spinner mr-1"></i> Mengirim...';
+    }
+
+    try {
+        const res = await fetch(API_URL, {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({ action: "resend-otp", nik })
+        });
+
+        const data = await res.json();
+        showNotification(data.message || 'Kode OTP baru telah dikirim', 'success');
+
+        // Increment resend attempts
+        resendAttempts++;
+        
+        // Reset OTP expiry countdown to 1 minute (60 seconds)
+        startOTPCountdown(60);
+        
+        // Calculate progressive cooldown: 1 min, 10 min, 20 min, 30 min, etc.
+        let cooldownSeconds;
+        if (resendAttempts === 1) {
+            cooldownSeconds = 60; // 1 minute for first resend
+        } else {
+            cooldownSeconds = resendAttempts * 600; // 10 minutes * attempt number
+        }
+        
+        startResendCooldown(cooldownSeconds);
+        
+        // Show cooldown info to user
+        const cooldownMinutes = Math.floor(cooldownSeconds / 60);
+        if (cooldownMinutes > 1) {
+            showNotification(`Kode OTP baru telah dikirim. Tunggu ${cooldownMinutes} menit untuk kirim ulang berikutnya.`, 'info');
+        }
+        
+    } catch (error) {
+        showNotification('Terjadi kesalahan saat mengirim ulang OTP. Silakan coba lagi.', 'error');
+        
+        // Reset button on error
+        if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = 'Kirim ulang';
+        }
+    }
+}
+
+// Alias for backward compatibility
+async function resendOTP() {
+    await resendOtp();
+}
+
+// === COOLDOWN TIMER WITH PROGRESSIVE TIMING ===
+function startResendCooldown(seconds) {
+    const btn = document.getElementById("resendBtn");
+    if (!btn) return;
+    
+    clearInterval(resendTimer);
+
+    let remaining = seconds;
+    btn.disabled = true;
+    
+    // Format initial display
+    updateCooldownDisplay(btn, remaining);
+
+    resendTimer = setInterval(() => {
+        remaining--;
+        if (remaining > 0) {
+            updateCooldownDisplay(btn, remaining);
+        } else {
+            clearInterval(resendTimer);
+            btn.disabled = false;
+            btn.innerHTML = 'Kirim ulang';
+        }
+    }, 1000);
+}
+
+function updateCooldownDisplay(btn, seconds) {
+    if (seconds >= 60) {
+        const minutes = Math.floor(seconds / 60);
+        const remainingSeconds = seconds % 60;
+        if (minutes >= 60) {
+            const hours = Math.floor(minutes / 60);
+            const remainingMinutes = minutes % 60;
+            btn.innerHTML = `Tunggu ${hours}j ${remainingMinutes}m ${remainingSeconds}d...`;
+        } else {
+            btn.innerHTML = `Tunggu ${minutes}m ${remainingSeconds}d...`;
         }
     } else {
-        emailElement.textContent = "Email tidak tersedia";
+        btn.innerHTML = `Tunggu ${seconds} detik...`;
     }
 }
 
-2. Script Utilitas (utils.js)
+// === OTP COUNTDOWN ===
+function startOTPCountdown(seconds) {
+    const countdownElement = document.getElementById('countdown');
+    if (!countdownElement) return;
+    
+    clearInterval(otpCountdown);
+    
+    let remaining = seconds;
+    
+    otpCountdown = setInterval(() => {
+        const minutes = Math.floor(remaining / 60);
+        const secs = remaining % 60;
+        countdownElement.textContent = `${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+        
+        if (remaining <= 0) {
+            clearInterval(otpCountdown);
+            countdownElement.textContent = '00:00';
+            alert('Kode OTP telah kedaluwarsa. Silakan minta kode baru.');
+        }
+        remaining--;
+    }, 1000);
+}
 
-// Password toggle functionality
+// === UTILITY FUNCTIONS ===
+function backToLogin() {
+    showSection('login-form');
+    localStorage.removeItem('nik');
+    localStorage.removeItem('userEmail');
+    localStorage.removeItem('tempUser');
+    clearInterval(resendTimer);
+    clearInterval(otpCountdown);
+    
+    // Reset resend attempts
+    resendAttempts = 0;
+    
+    // Clear form data
+    document.getElementById('nik').value = '';
+    document.getElementById('password').value = '';
+    document.querySelectorAll('.otp-input').forEach(input => input.value = '');
+    
+    // Reset email display
+    const userEmailElement = document.getElementById('userEmail');
+    if (userEmailElement) {
+        userEmailElement.textContent = 'Loading...';
+    }
+}
+
 function togglePassword() {
     const passwordInput = document.getElementById('password');
     const toggleIcon = document.getElementById('passwordToggleIcon');
@@ -494,438 +595,135 @@ function togglePassword() {
     }
 }
 
-// Show dashboard
-function showDashboard() {
-    document.getElementById('loginContainer').classList.add('hidden');
-    document.getElementById('dashboardContainer').classList.remove('hidden');
-    
-    // Update user profile in dashboard
-    updateUserProfile();
-    
-    // Change body background for dashboard
-    document.body.className = 'h-full bg-gray-50 dark:bg-gray-900 transition-colors duration-300';
-}
-
-// Update user profile information
-function updateUserProfile() {
-    const userDataString = localStorage.getItem('user');
-    let userData = null;
-    
-    if (userDataString) {
-        try {
-            userData = JSON.parse(userDataString);
-        } catch (error) {
-            // Silent error handling
-        }
+function moveToNext(current, index) {
+    if (current.value.length === 1 && index < 5) {
+        const nextInput = document.querySelectorAll('.otp-input')[index + 1];
+        if (nextInput) nextInput.focus();
     }
     
-    // Get user information with fallbacks
-    const userName = userData?.Username || localStorage.getItem('userName') || 'John Doe';
-    const userRole = userData?.Role || 'Administrator';
-    const profileAvatar = userData?.ProfilAvatar;
-    
-    // Update name displays
-    document.getElementById('userNameSidebar').textContent = userName;
-    document.getElementById('userNameMobile').textContent = userName;
-    document.getElementById('userNameWelcome').textContent = userName;
-    
-    // Update role displays
-    document.getElementById('userRoleSidebar').textContent = userRole;
-    document.getElementById('userRoleMobile').textContent = userRole;
-    
-    // Update profile images
-    updateProfileImage('sidebarProfileImage', profileAvatar);
-    updateProfileImage('mobileProfileImage', profileAvatar);
-}
-
-// Update profile image
-function updateProfileImage(elementId, avatarUrl) {
-    const profileElement = document.getElementById(elementId);
-    if (!profileElement) return;
-    
-    if (avatarUrl && avatarUrl.trim() !== '') {
-        // Create image element using your proxy service
-        const img = document.createElement('img');
-        img.src = `https://test.bulshitman1.workers.dev/avatar?url=${encodeURIComponent(avatarUrl)}`;
-        img.alt = 'Profile Avatar';
-        img.className = 'w-full h-full object-cover rounded-full';
-        
-        // Handle image load success
-        img.onload = function() {
-            profileElement.innerHTML = '';
-            profileElement.appendChild(img);
-        };
-        
-        // Handle image load error - fallback to icon
-        img.onerror = function() {
-            profileElement.innerHTML = '<i class="fas fa-user text-white text-sm"></i>';
-        };
-        
-        // Set a timeout fallback in case image takes too long
-        setTimeout(() => {
-            if (!profileElement.querySelector('img')) {
-                profileElement.innerHTML = '<i class="fas fa-user text-white text-sm"></i>';
-            }
-        }, 10000); // 10 second timeout
-    } else {
-        // No avatar URL, use default icon
-        profileElement.innerHTML = '<i class="fas fa-user text-white text-sm"></i>';
-    }
-}
-
-// Logout function
-function logout() {
-    if (confirm('Apakah Anda yakin ingin keluar?')) {
-        // Clear all stored data
-        localStorage.removeItem('userNIK');
-        localStorage.removeItem('userName');
-        localStorage.removeItem('isLoggedIn');
-        localStorage.removeItem('nik');
-        localStorage.removeItem('user');
-        localStorage.removeItem('userEmail');
-        
-        // Reset forms
-        document.getElementById('nik').value = '';
-        document.getElementById('password').value = '';
-        document.querySelectorAll('.otp-input').forEach(input => {
-            input.value = '';
-        });
-        
-        // Clear all timers
-        if (countdownTimer) {
-            clearInterval(countdownTimer);
-        }
-        if (resendTimer) {
-            clearInterval(resendTimer);
-        }
-        
-        // Reset resend button and cooldown time
-        const resendBtn = document.getElementById('resendBtn');
-        if (resendBtn) {
-            resendBtn.disabled = false;
-            resendBtn.textContent = 'Kirim ulang';
-        }
-        
-        // Reset cooldown time to initial value
-        resendCooldownTime = 60;
-        
-        // Show login container
-        document.getElementById('dashboardContainer').classList.add('hidden');
-        document.getElementById('loginContainer').classList.remove('hidden');
-        document.getElementById('otpForm').classList.add('hidden');
-        document.getElementById('loginForm').classList.remove('hidden');
-        
-        // Reset body background
-        document.body.className = 'h-full bg-gradient-to-br from-blue-50 to-indigo-100 dark:from-gray-900 dark:to-gray-800 transition-colors duration-300';
-        
-        // Reset email display
-        const emailElement = document.getElementById('userEmail');
-        if (emailElement) {
-            emailElement.textContent = 'Loading...';
-        }
-    }
-}
-
-3. Script Konfigurasi API (api-config.js)
-
-// API Configuration
-const API_CONFIG = {
-    BASE_URL: "https://test.bulshitman1.workers.dev",
-    ENDPOINTS: {
-        LOGIN: "/login",
-        VERIFY_OTP: "/verify-otp", 
-        RESEND_OTP: "/resend-otp",
-        GET_USER_EMAIL: "/get-user-email",
-        AVATAR_PROXY: "/avatar"
-    },
-    TIMEOUT: 30000, // 30 seconds
-    RETRY_ATTEMPTS: 3
-};
-
-// API Helper Functions
-class APIClient {
-    constructor(baseURL = API_CONFIG.BASE_URL) {
-        this.baseURL = baseURL;
-    }
-
-    async request(endpoint, options = {}) {
-        const url = `${this.baseURL}${endpoint}`;
-        const config = {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                ...options.headers
-            },
-            ...options
-        };
-
-        try {
-            const response = await fetch(url, config);
-            
-            if (!response.ok) {
-                throw new Error(`HTTP error! status: ${response.status}`);
-            }
-            
-            return await response.json();
-        } catch (error) {
-            console.error('API request failed:', error);
-            throw error;
-        }
-    }
-
-    async login(nik, password) {
-        return this.request('', {
-            body: JSON.stringify({ 
-                action: "login", 
-                nik, 
-                password 
-            })
-        });
-    }
-
-    async verifyOTP(nik, otp) {
-        return this.request('', {
-            body: JSON.stringify({ 
-                action: "verify-otp", 
-                nik, 
-                otp 
-            })
-        });
-    }
-
-    async resendOTP(nik) {
-        return this.request('', {
-            body: JSON.stringify({ 
-                action: "resend-otp", 
-                nik 
-            })
-        });
-    }
-
-    async getUserEmail(nik) {
-        return this.request('', {
-            body: JSON.stringify({ 
-                action: "get-user-email", 
-                nik 
-            })
-        });
-    }
-
-    getAvatarURL(avatarUrl) {
-        return `${this.baseURL}/avatar?url=${encodeURIComponent(avatarUrl)}`;
-    }
-}
-
-// Create global API client instance
-const apiClient = new APIClient();
-
-4. Script Validasi (validation.js)
-
-// Validation Functions
-class Validator {
-    static validateNIK(nik) {
-        if (!nik) {
-            return { valid: false, message: 'NIK tidak boleh kosong' };
-        }
-        
-        if (nik.length !== 16) {
-            return { valid: false, message: 'NIK harus terdiri dari 16 digit' };
-        }
-        
-        if (!/^\d+$/.test(nik)) {
-            return { valid: false, message: 'NIK hanya boleh berisi angka' };
-        }
-        
-        return { valid: true, message: 'NIK valid' };
-    }
-
-    static validatePassword(password) {
-        if (!password) {
-            return { valid: false, message: 'Password tidak boleh kosong' };
-        }
-        
-        if (password.length < 6) {
-            return { valid: false, message: 'Password minimal 6 karakter' };
-        }
-        
-        return { valid: true, message: 'Password valid' };
-    }
-
-    static validateOTP(otp) {
-        if (!otp) {
-            return { valid: false, message: 'Kode OTP tidak boleh kosong' };
-        }
-        
-        if (otp.length !== 6) {
-            return { valid: false, message: 'Kode OTP harus 6 digit' };
-        }
-        
-        if (!/^\d+$/.test(otp)) {
-            return { valid: false, message: 'Kode OTP hanya boleh berisi angka' };
-        }
-        
-        return { valid: true, message: 'Kode OTP valid' };
-    }
-
-    static validateEmail(email) {
-        if (!email) {
-            return { valid: false, message: 'Email tidak boleh kosong' };
-        }
-        
-        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-        if (!emailRegex.test(email)) {
-            return { valid: false, message: 'Format email tidak valid' };
-        }
-        
-        return { valid: true, message: 'Email valid' };
-    }
-}
-
-// Form validation helpers
-function showFieldError(fieldId, message) {
-    const field = document.getElementById(fieldId);
-    if (!field) return;
-    
-    // Remove existing error
-    const existingError = field.parentNode.querySelector('.field-error');
-    if (existingError) {
-        existingError.remove();
-    }
-    
-    // Add error styling
-    field.classList.add('border-red-500', 'focus:ring-red-500');
-    field.classList.remove('border-gray-300', 'focus:ring-blue-500');
-    
-    // Add error message
-    const errorDiv = document.createElement('div');
-    errorDiv.className = 'field-error mt-1 text-sm text-red-600 dark:text-red-400';
-    errorDiv.textContent = message;
-    field.parentNode.appendChild(errorDiv);
-}
-
-function clearFieldError(fieldId) {
-    const field = document.getElementById(fieldId);
-    if (!field) return;
-    
-    // Remove error styling
-    field.classList.remove('border-red-500', 'focus:ring-red-500');
-    field.classList.add('border-gray-300', 'focus:ring-blue-500');
-    
-    // Remove error message
-    const existingError = field.parentNode.querySelector('.field-error');
-    if (existingError) {
-        existingError.remove();
-    }
-}
-
-function validateLoginForm() {
-    const nik = document.getElementById('nik').value;
-    const password = document.getElementById('password').value;
-    
-    let isValid = true;
-    
-    // Clear previous errors
-    clearFieldError('nik');
-    clearFieldError('password');
-    
-    // Validate NIK
-    const nikValidation = Validator.validateNIK(nik);
-    if (!nikValidation.valid) {
-        showFieldError('nik', nikValidation.message);
-        isValid = false;
-    }
-    
-    // Validate Password
-    const passwordValidation = Validator.validatePassword(password);
-    if (!passwordValidation.valid) {
-        showFieldError('password', passwordValidation.message);
-        isValid = false;
-    }
-    
-    return isValid;
-}
-
-function validateOTPForm() {
+    // Auto-submit when all 6 digits are entered
     const otpInputs = document.querySelectorAll('.otp-input');
     const otp = Array.from(otpInputs).map(input => input.value).join('');
-    
-    const otpValidation = Validator.validateOTP(otp);
-    
-    if (!otpValidation.valid) {
-        // Highlight OTP inputs with error
-        otpInputs.forEach(input => {
-            input.classList.add('border-red-500', 'focus:ring-red-500');
-            input.classList.remove('border-gray-300', 'focus:ring-blue-500');
-        });
-        
-        // Show error message
-        alert(otpValidation.message);
-        return false;
+    if (otp.length === 6) {
+        // Small delay to ensure last digit is processed
+        setTimeout(() => {
+            const otpForm = document.querySelector('#otpForm form');
+            if (otpForm) {
+                otpForm.dispatchEvent(new Event('submit'));
+            }
+        }, 100);
     }
-    
-    // Clear error styling
-    otpInputs.forEach(input => {
-        input.classList.remove('border-red-500', 'focus:ring-red-500');
-        input.classList.add('border-gray-300', 'focus:ring-blue-500');
-    });
-    
-    return true;
 }
 
-5. Script Konstanta (constants.js)
-
-// Application Constants
-const APP_CONSTANTS = {
-    // Timer settings
-    OTP_COUNTDOWN_SECONDS: 60, // 1 minute
-    INITIAL_RESEND_COOLDOWN: 60, // 1 minute
-    EXTENDED_RESEND_COOLDOWN: 600, // 10 minutes
-    
-    // Validation rules
-    NIK_LENGTH: 16,
-    MIN_PASSWORD_LENGTH: 6,
-    OTP_LENGTH: 6,
-    
-    // Local storage keys
-    STORAGE_KEYS: {
-        NIK: 'nik',
-        USER_EMAIL: 'userEmail',
-        USER_DATA: 'user',
-        USER_NIK: 'userNIK',
-        USER_NAME: 'userName',
-        IS_LOGGED_IN: 'isLoggedIn'
-    },
-    
-    // CSS classes
-    CSS_CLASSES: {
-        HIDDEN: 'hidden',
-        ERROR_BORDER: 'border-red-500',
-        ERROR_RING: 'focus:ring-red-500',
-        SUCCESS_BORDER: 'border-green-500',
-        SUCCESS_RING: 'focus:ring-green-500',
-        DEFAULT_BORDER: 'border-gray-300',
-        DEFAULT_RING: 'focus:ring-blue-500'
-    },
-    
-    // Messages
-    MESSAGES: {
-        NIK_REQUIRED: 'NIK tidak boleh kosong',
-        NIK_INVALID_LENGTH: 'NIK harus terdiri dari 16 digit',
-        NIK_INVALID_FORMAT: 'NIK hanya boleh berisi angka',
-        PASSWORD_REQUIRED: 'Password tidak boleh kosong',
-        PASSWORD_TOO_SHORT: 'Password minimal 6 karakter',
-        OTP_REQUIRED: 'Kode OTP tidak boleh kosong',
-        OTP_INVALID_LENGTH: 'Kode OTP harus 6 digit',
-        OTP_INVALID_FORMAT: 'Kode OTP hanya boleh berisi angka',
-        OTP_EXPIRED: 'Kode OTP telah kedaluwarsa. Silakan klik "Kirim ulang" untuk mendapatkan kode baru.',
-        LOGIN_ERROR: 'Terjadi kesalahan saat login. Silakan coba lagi.',
-        OTP_ERROR: 'Terjadi kesalahan saat verifikasi OTP. Silakan coba lagi.',
-        RESEND_ERROR: 'Terjadi kesalahan saat mengirim ulang OTP. Silakan coba lagi.',
-        LOGOUT_CONFIRM: 'Apakah Anda yakin ingin keluar?'
+function logout() {
+    if (confirm('Apakah Anda yakin ingin keluar?')) {
+        localStorage.removeItem('isLoggedIn');
+        localStorage.removeItem('user');
+        localStorage.removeItem('nik');
+        localStorage.removeItem('userEmail');
+        localStorage.removeItem('tempUser');
+        clearInterval(resendTimer);
+        clearInterval(otpCountdown);
+        
+        // Reset resend attempts
+        resendAttempts = 0;
+        
+        showSection('login-form');
+        
+        // Clear all form data
+        document.getElementById('nik').value = '';
+        document.getElementById('password').value = '';
+        document.querySelectorAll('.otp-input').forEach(input => input.value = '');
+        
+        // Reset email display
+        const userEmailElement = document.getElementById('userEmail');
+        if (userEmailElement) {
+            userEmailElement.textContent = 'Loading...';
+        }
     }
-};
+}
 
-// Export constants for use in other files
-if (typeof module !== 'undefined' && module.exports) {
-    module.exports = APP_CONSTANTS;
+// === KEYBOARD NAVIGATION FOR OTP ===
+document.addEventListener('DOMContentLoaded', function() {
+    const otpInputs = document.querySelectorAll('.otp-input');
+    
+    otpInputs.forEach((input, index) => {
+        input.addEventListener('keydown', function(e) {
+            // Handle backspace
+            if (e.key === 'Backspace' && !input.value && index > 0) {
+                otpInputs[index - 1].focus();
+            }
+            
+            // Handle arrow keys
+            if (e.key === 'ArrowLeft' && index > 0) {
+                otpInputs[index - 1].focus();
+            }
+            if (e.key === 'ArrowRight' && index < 5) {
+                otpInputs[index + 1].focus();
+            }
+        });
+        
+        // Only allow numbers
+        input.addEventListener('input', function(e) {
+            this.value = this.value.replace(/[^0-9]/g, '');
+        });
+    });
+});
+
+// === INPUT VALIDATION ===
+function validateNIK(input) {
+    // Only allow numbers
+    input.value = input.value.replace(/[^0-9]/g, '');
+    
+    // Remove error styling if exists
+    input.classList.remove('border-red-500', 'focus:ring-red-500');
+    input.classList.add('border-gray-300', 'dark:border-gray-600', 'focus:ring-blue-500');
+}
+
+function validateNIKOnBlur(input) {
+    if (input.value.length > 0 && input.value.length !== 16) {
+        input.classList.remove('border-gray-300', 'dark:border-gray-600', 'focus:ring-blue-500');
+        input.classList.add('border-red-500', 'focus:ring-red-500');
+        
+        // Add shake animation
+        input.style.animation = 'shake 0.5s ease-in-out';
+        setTimeout(() => {
+            input.style.animation = '';
+        }, 500);
+    }
+}
+
+function addInputFeedback() {
+    const nikInput = document.getElementById('nik');
+    const passwordInput = document.getElementById('password');
+    
+    // Add real-time feedback
+    if (nikInput) {
+        nikInput.addEventListener('input', function() {
+            const length = this.value.length;
+            const icon = this.parentElement.querySelector('i');
+            
+            if (length === 16) {
+                icon.className = 'fas fa-check text-green-500';
+            } else if (length > 0) {
+                icon.className = 'fas fa-id-card text-blue-500';
+            } else {
+                icon.className = 'fas fa-id-card text-gray-400';
+            }
+        });
+    }
+    
+    if (passwordInput) {
+        passwordInput.addEventListener('input', function() {
+            const icon = this.parentElement.querySelector('.fa-lock');
+            
+            if (this.value.length >= 6) {
+                icon.className = 'fas fa-lock text-green-500';
+            } else if (this.value.length > 0) {
+                icon.className = 'fas fa-lock text-blue-500';
+            } else {
+                icon.className = 'fas fa-lock text-gray-400';
+            }
+        });
+    }
 }
